@@ -113,6 +113,21 @@ curl -X POST http://localhost:8080/jobs \
   }'
 ```
 
+## Postman collection
+
+Import:
+
+- `postman/billing-agent-api.postman-collection.json`
+
+Collection variables:
+
+- `baseUrl` (default `http://localhost:8080`)
+- `apiToken` (`API_TOKEN` value from your `.env`)
+- `jobId` (default `smoke-test`)
+- `runId` (set after listing runs)
+
+The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
+
 ## Overlay learning behavior
 
 - Only recoverable errors are eligible: `LoginError`, `ScrapeError`, `TimeoutError`.
