@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { registerBuiltInAdapters } from './adapters/registry.js';
 import { loadConfig } from './config.js';
 import { runJobs } from './job-runner.js';
+import { startDaemon } from './scheduler.js';
 
 registerBuiltInAdapters();
 
@@ -27,6 +28,14 @@ program
     const jobIds = options.all ? 'all' : [options.job as string];
     const { failed } = await runJobs(app, jobIds);
     process.exitCode = failed > 0 ? 1 : 0;
+  });
+
+program
+  .command('daemon')
+  .option('--config <path>', 'path to jobs.json', 'jobs.json')
+  .action(async (options: { config: string }) => {
+    const app = loadConfig({ configPath: options.config });
+    await startDaemon(app);
   });
 
 await program.parseAsync(process.argv);
