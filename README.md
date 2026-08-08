@@ -10,6 +10,9 @@ Each job launches headless Chromium, runs a provider-specific adapter (login, ca
 2. Launch a short-lived Chromium instance (Playwright)
 3. Run the adapter for the job’s `provider` (`dummy`, `tnpdcl`, or your own)
 4. POST bill details (amount, due date, period, masked account) to ntfy on success
+
+When TNPDCL Bill Payments and Disconnected Services both show "No records found", the job succeeds without sending a success notification.
+
 5. On failure: classify the error, optionally save a screenshot under `tmp/`, notify with high priority
 
 Built-in adapters:

@@ -139,20 +139,21 @@ export function firstAdvanceConsumerNoFromHtml(html: string): string | undefined
   if (!fieldsetMatch?.[1]) return undefined;
   const body = fieldsetMatch[1];
   const rowRe =
-    /<tr\b(?![^>]*ui-datatable-empty-message)[^>]*>([\s\S]*?)<\/tr>/i;
-  const rowMatch = rowRe.exec(body);
-  if (!rowMatch?.[1]) return undefined;
-  const firstTdMatch = /<td\b[^>]*>([\s\S]*?)<\/td>/i.exec(rowMatch[1]);
-  if (!firstTdMatch?.[1]) return undefined;
-  const cellHtml = firstTdMatch[1];
-  const uiDtMatch =
-    /<[^>]+\bclass=["'][^"']*\bui-dt-c\b[^"']*["'][^>]*>\s*([^<]+?)\s*<\/[^>]+>/i.exec(
-      cellHtml,
-    );
-  const fromUiDt = uiDtMatch?.[1]?.trim();
-  if (fromUiDt) return fromUiDt;
-  const directText = cellHtml.replace(/<[^>]+>/g, '').trim();
-  return directText || undefined;
+    /<tr\b(?![^>]*ui-datatable-empty-message)[^>]*>([\s\S]*?)<\/tr>/gi;
+  for (const rowMatch of body.matchAll(rowRe)) {
+    const firstTdMatch = /<td\b[^>]*>([\s\S]*?)<\/td>/i.exec(rowMatch[1]);
+    if (!firstTdMatch?.[1]) continue;
+    const cellHtml = firstTdMatch[1];
+    const uiDtMatch =
+      /<[^>]+\bclass=["'][^"']*\bui-dt-c\b[^"']*["'][^>]*>\s*([^<]+?)\s*<\/[^>]+>/i.exec(
+        cellHtml,
+      );
+    const fromUiDt = uiDtMatch?.[1]?.trim();
+    if (fromUiDt) return fromUiDt;
+    const directText = cellHtml.replace(/<[^>]+>/g, '').trim();
+    if (directText) return directText;
+  }
+  return undefined;
 }
 
 /** `1234567890` -> `****7890`. Exported for unit testing and reuse by notify formatting. */
