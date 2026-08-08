@@ -151,7 +151,8 @@ export async function handleRoute(
       return;
     }
     const body = await readJsonBody(req);
-    const merged = coerceJobDocument({ ...existing, ...body, id: jobId }, existing);
+    const patch = isObject(body) ? body : {};
+    const merged = coerceJobDocument({ ...existing, ...patch, id: jobId }, existing);
     await ctx.store.upsertJob(merged);
     await bumpJobsGeneration(ctx.store);
     sendJson(res, 200, merged);
