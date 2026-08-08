@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   BILL_PAYMENTS_TBODY_ID,
+  buildNoPendingBillResultFromHtml,
   DISCONNECTED_TBODY_ID,
   dataTableIsEmptyInHtml,
   firstAdvanceConsumerNoFromHtml,
@@ -65,6 +66,22 @@ describe('hasNoPendingBillsInHtml', () => {
     assert.equal(hasNoPendingBillsInHtml(emptyHtml), true);
     assert.equal(hasNoPendingBillsInHtml(oneBillHtml), false);
     assert.equal(hasNoPendingBillsInHtml('<html></html>'), false);
+  });
+});
+
+describe('buildNoPendingBillResultFromHtml', () => {
+  it('returns a quiet BillResult for an empty fixture', () => {
+    assert.deepEqual(buildNoPendingBillResultFromHtml(emptyHtml), {
+      provider: 'tnpdcl',
+      amount: '₹0',
+      status: 'no pending bills',
+      accountLabel: '****0333',
+      notify: false,
+    });
+  });
+
+  it('returns null when a bill row exists', () => {
+    assert.equal(buildNoPendingBillResultFromHtml(oneBillHtml), null);
   });
 });
 

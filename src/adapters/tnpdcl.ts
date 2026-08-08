@@ -162,6 +162,18 @@ export function maskAccount(id: string): string {
   return `****${trimmed.slice(-4)}`;
 }
 
+export function buildNoPendingBillResultFromHtml(html: string): BillResult | null {
+  if (!hasNoPendingBillsInHtml(html)) return null;
+  const consumer = firstAdvanceConsumerNoFromHtml(html);
+  return {
+    provider: 'tnpdcl',
+    amount: '₹0',
+    status: 'no pending bills',
+    accountLabel: consumer ? maskAccount(consumer) : '****',
+    notify: false,
+  };
+}
+
 export function classifyLoginFailure(message: string): 'captcha' | 'login' {
   const captchaRejection =
     /\bcaptcha(?:\s+(?:code|response|text|value|entry))?\s*(?:is|was|:|-)?\s*(?:invalid|incorrect|wrong|mismatch(?:ed)?)\b|\b(?:invalid|incorrect|wrong|mismatch(?:ed)?)\s+(?:for\s+)?(?:the\s+)?captcha\b/i;
@@ -196,6 +208,7 @@ async function navigateToBillPageIfNeeded(page: Page, ctx: AdapterContext): Prom
   try {
     const billLink = page
       .locator('a', { hasText: /view\s*bill|my\s*bills?|bill\s*details/i })
+      .or(page.locator('a[href*="grouppay"]'))
       .first();
     if ((await billLink.count()) > 0) {
       await clickAndWaitForNavigation(page, billLink, ctx.timeoutMs);
@@ -209,6 +222,13 @@ async function navigateToBillPageIfNeeded(page: Page, ctx: AdapterContext): Prom
 
 async function scrapeBill(page: Page, ctx: AdapterContext): Promise<BillResult> {
   await navigateToBillPageIfNeeded(page, ctx);
+
+  const html = await page.content();
+  const noPending = buildNoPendingBillResultFromHtml(html);
+  if (noPending) {
+    ctx.logger.info('tnpdcl: no pending bills');
+    return noPending;
+  }
 
   const pageText = await page.locator('body').innerText();
 
