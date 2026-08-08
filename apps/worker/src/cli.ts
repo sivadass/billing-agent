@@ -10,6 +10,7 @@ import {
   registerBuiltInAdapters,
   runJobs,
 } from '@billing-agent/core';
+import { startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
 
 registerBuiltInAdapters();
@@ -47,6 +48,23 @@ function requireMongoUri(env: NodeJS.ProcessEnv = process.env): string {
   return uri;
 }
 
+function requireApiToken(env: NodeJS.ProcessEnv = process.env): string {
+  const token = env.API_TOKEN;
+  if (!token) {
+    throw new ConfigError('Missing environment variable: API_TOKEN');
+  }
+  return token;
+}
+
+function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.HTTP_PORT ?? '8080';
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new ConfigError('HTTP_PORT must be a positive integer');
+  }
+  return port;
+}
+
 program
   .command('run')
   .option('--job <id>', 'run a single job id')
@@ -76,7 +94,18 @@ program
   .action(withErrorHandling(async () => {
     const store = await connectStore(requireMongoUri());
     const app = await loadConfigFromStore(store);
-    await startDaemon(app);
+    const server = await startServer({
+      port: resolveHttpPort(),
+      token: requireApiToken(),
+      store,
+    });
+
+    try {
+      await startDaemon(app, { store });
+    } finally {
+      await server.close();
+      await store.close();
+    }
   }));
 
 program

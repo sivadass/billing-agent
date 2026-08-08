@@ -4,7 +4,7 @@
   "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "build": "npm run build -w @billing-agent/core && npm run build -w @billing-agent/api && npm run build -w @billing-agent/worker",
-    "test": "npm run test -w @billing-agent/core && npm run test -w @billing-agent/worker",
+    "test": "npm run test -w @billing-agent/core && npm run test -w @billing-agent/api && npm run test -w @billing-agent/worker",
     "dev": "npm run dev -w @billing-agent/worker",
     "start": "npm run start -w @billing-agent/worker",
     "postinstall": "playwright install chromium"
