@@ -6,7 +6,7 @@ export type SelectorOverlay = Record<string, string | string[]>;
 const MAX_OVERLAY_KEYS = 16;
 const MAX_OVERLAY_TEXT_LENGTH = 512;
 
-const allowedKeys = new Set([
+export const tnpdclOverlayKeys = [
   'username',
   'password',
   'captchaInput',
@@ -18,7 +18,9 @@ const allowedKeys = new Set([
   'billPeriod',
   'status',
   'accountLabel',
-]);
+];
+
+const allowedKeys = new Set(tnpdclOverlayKeys);
 
 function assertOverlayString(value: unknown, key: string): string {
   if (typeof value !== 'string' || value.length === 0) {

@@ -6,6 +6,7 @@ import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
 import { ConfigError, LoginError } from '../src/errors.ts';
+import type { BillingStore } from '../src/store/types.ts';
 import { runJob, runJobs } from '../src/job-runner.ts';
 
 const job: JobConfig = {
@@ -43,6 +44,101 @@ const billResult: BillResult = {
 };
 
 describe('runJob', () => {
+  it('attempts one recovery and records overlay success after retry succeeds', async () => {
+    const calls: string[] = [];
+    const runUpdates: Array<Partial<Record<string, unknown>>> = [];
+    const store: BillingStore = {
+      getSettings: async () => {
+        throw new Error('not used');
+      },
+      listJobs: async () => {
+        throw new Error('not used');
+      },
+      getJob: async () => null,
+      upsertJob: async () => {},
+      upsertSettings: async () => {},
+      listActiveOverlays: async () => [],
+      recordOverlaySuccess: async (input) => ({
+        provider: input.provider,
+        jobId: input.jobId,
+        fingerprint: input.fingerprint,
+        patch: input.patch,
+        successCount: 1,
+        status: 'candidate',
+        updatedAt: new Date().toISOString(),
+      }),
+      createRun: async () => {},
+      finishRun: async (_id, update) => {
+        runUpdates.push(update);
+      },
+      listRuns: async () => [],
+      getRun: async () => null,
+      close: async () => {},
+    };
+
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        calls.push('run');
+        if (calls.length === 1) {
+          throw new LoginError('login failed once');
+        }
+        return billResult;
+      },
+    };
+
+    const result = await runJob(app, job, {
+      withBrowser: async (_config, callback) =>
+        callback({
+          url: () => 'https://example.test/login',
+          title: async () => 'Login',
+          screenshot: async () => Buffer.alloc(0),
+        } as unknown as Page),
+      sendNtfy: async () => {},
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+      store,
+      extractCompactDom: async () => '<input id="userName" />',
+      proposeOverlayPatch: async () => ({ username: '#userName' }),
+    });
+
+    assert.deepEqual(result, { ok: true, result: billResult });
+    assert.equal(calls.length, 2);
+    assert.equal(runUpdates.length > 0, true);
+    assert.equal(runUpdates.at(-1)?.recoveryAttempted, true);
+    assert.equal(runUpdates.at(-1)?.recoverySucceeded, true);
+  });
+
+  it('does not run recovery for ConfigError failures', async () => {
+    let recoveryCalls = 0;
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        throw new ConfigError('bad settings');
+      },
+    };
+
+    const result = await runJob(app, job, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async () => {},
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+      proposeOverlayPatch: async () => {
+        recoveryCalls += 1;
+        return { username: '#userName' };
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(recoveryCalls, 0);
+  });
+
   it('resolves job credentials and sends a success notification with the configured priority', async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const adapter: BillingAdapter = {
