@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@mistralai/mistralai": "^1.10.0",
+    "mongodb": "^6.21.0",
     "playwright": "^1.52.0"
   },
   "devDependencies": {

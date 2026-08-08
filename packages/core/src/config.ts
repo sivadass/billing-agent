@@ -1,23 +1,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError } from './errors.js';
+import type { BillingStore, JobDocument, SettingsDocument } from './store/types.js';
 
-export type BrowserConfig = {
-  headless: boolean;
-  timeoutMs: number;
-  saveErrorScreenshot: boolean;
-  noSandbox?: boolean;
-};
-
-export type JobConfig = {
-  id: string;
-  provider: string;
-  enabled: boolean;
-  schedule: string | null;
-  /** Maps credential field name (e.g. "username") to the env var that holds it. Resolved lazily via resolveJobCredentials. */
-  credentialsEnv: Record<string, string>;
-  notify: { title: string };
-};
+export type BrowserConfig = SettingsDocument['browser'];
+export type JobConfig = JobDocument;
 
 export type ResolvedNtfy = {
   baseUrl: string;
@@ -25,11 +12,7 @@ export type ResolvedNtfy = {
   priority: string;
 };
 
-export type MistralConfig = {
-  /** Env var name holding the Mistral API key. Resolved lazily via resolveMistralApiKey. */
-  apiKeyEnv: string;
-  model: string;
-};
+export type MistralConfig = SettingsDocument['mistral'];
 
 export type AppConfig = {
   configPath: string;
@@ -37,9 +20,16 @@ export type AppConfig = {
   mistral: MistralConfig;
   browser: BrowserConfig;
   jobs: JobConfig[];
+  jobsGeneration: number;
 };
 
 type JsonObject = Record<string, unknown>;
+type SeedSettings = Omit<SettingsDocument, 'id'>;
+export type SeedConfig = {
+  configPath: string;
+  settings: SeedSettings;
+  jobs: JobConfig[];
+};
 
 function requireObject(value: unknown, name: string): JsonObject {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -95,6 +85,38 @@ export function resolveMistralApiKey(
   return resolveEnv(env, mistral.apiKeyEnv, 'mistral.apiKeyEnv');
 }
 
+function parseBrowserConfig(browser: JsonObject): BrowserConfig {
+  const timeoutMs = browser.timeoutMs ?? 60_000;
+  if (
+    typeof timeoutMs !== 'number' ||
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0
+  ) {
+    throw new ConfigError('browser.timeoutMs must be a positive number');
+  }
+
+  const noSandbox = browser.noSandbox;
+  if (noSandbox !== undefined && typeof noSandbox !== 'boolean') {
+    throw new ConfigError('browser.noSandbox must be a boolean');
+  }
+
+  return {
+    headless:
+      browser.headless === undefined
+        ? true
+        : requireBoolean(browser.headless, 'browser.headless'),
+    timeoutMs,
+    saveErrorScreenshot:
+      browser.saveErrorScreenshot === undefined
+        ? true
+        : requireBoolean(
+            browser.saveErrorScreenshot,
+            'browser.saveErrorScreenshot',
+          ),
+    ...(noSandbox === undefined ? {} : { noSandbox }),
+  };
+}
+
 function parseJob(value: unknown, index: number): JobConfig {
   const job = requireObject(value, `jobs[${index}]`);
   const schedule = job.schedule;
@@ -132,12 +154,10 @@ function parseJob(value: unknown, index: number): JobConfig {
   };
 }
 
-export function loadConfig(options?: {
+export function loadSeedConfig(options?: {
   configPath?: string;
-  env?: NodeJS.ProcessEnv;
-}): AppConfig {
+}): SeedConfig {
   const configPath = path.resolve(options?.configPath ?? 'jobs.json');
-  const env = options?.env ?? process.env;
 
   let contents: string;
   try {
@@ -165,55 +185,84 @@ export function loadConfig(options?: {
     throw new ConfigError('jobs must be an array');
   }
 
-  const timeoutMs = browser.timeoutMs ?? 60_000;
-  if (
-    typeof timeoutMs !== 'number' ||
-    !Number.isFinite(timeoutMs) ||
-    timeoutMs <= 0
-  ) {
-    throw new ConfigError('browser.timeoutMs must be a positive number');
-  }
-
-  const noSandbox = browser.noSandbox;
-  if (noSandbox !== undefined && typeof noSandbox !== 'boolean') {
-    throw new ConfigError('browser.noSandbox must be a boolean');
-  }
-
   return {
     configPath,
-    ntfy: {
-      baseUrl:
-        ntfy.baseUrl === undefined
-          ? 'https://ntfy.sh'
-          : requireString(ntfy.baseUrl, 'ntfy.baseUrl'),
-      topic: resolveEnv(env, ntfy.topicEnv, 'ntfy.topicEnv'),
-      priority:
-        ntfy.priority === undefined
-          ? 'default'
-          : requireString(ntfy.priority, 'ntfy.priority'),
-    },
-    mistral: {
-      apiKeyEnv: requireString(mistral.apiKeyEnv, 'mistral.apiKeyEnv'),
-      model:
-        mistral.model === undefined
-          ? 'mistral-small-latest'
-          : requireString(mistral.model, 'mistral.model'),
-    },
-    browser: {
-      headless:
-        browser.headless === undefined
-          ? true
-          : requireBoolean(browser.headless, 'browser.headless'),
-      timeoutMs,
-      saveErrorScreenshot:
-        browser.saveErrorScreenshot === undefined
-          ? true
-          : requireBoolean(
-              browser.saveErrorScreenshot,
-              'browser.saveErrorScreenshot',
-            ),
-      ...(noSandbox === undefined ? {} : { noSandbox }),
+    settings: {
+      ntfy: {
+        baseUrl:
+          ntfy.baseUrl === undefined
+            ? 'https://ntfy.sh'
+            : requireString(ntfy.baseUrl, 'ntfy.baseUrl'),
+        topicEnv: requireString(ntfy.topicEnv, 'ntfy.topicEnv'),
+        priority:
+          ntfy.priority === undefined
+            ? 'default'
+            : requireString(ntfy.priority, 'ntfy.priority'),
+      },
+      mistral: {
+        apiKeyEnv: requireString(mistral.apiKeyEnv, 'mistral.apiKeyEnv'),
+        model:
+          mistral.model === undefined
+            ? 'mistral-small-latest'
+            : requireString(mistral.model, 'mistral.model'),
+      },
+      browser: parseBrowserConfig(browser),
+      jobsGeneration:
+        root.jobsGeneration === undefined
+          ? 0
+          : requireNumber(root.jobsGeneration, 'jobsGeneration'),
     },
     jobs: root.jobs.map((job, index) => parseJob(job, index)),
   };
+}
+
+function requireNumber(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ConfigError(`${name} must be a finite number`);
+  }
+  return value;
+}
+
+function toAppConfig(
+  configPath: string,
+  settings: SeedSettings,
+  jobs: JobConfig[],
+  env: NodeJS.ProcessEnv,
+): AppConfig {
+  return {
+    configPath,
+    ntfy: {
+      baseUrl: settings.ntfy.baseUrl,
+      topic: resolveEnv(env, settings.ntfy.topicEnv, 'ntfy.topicEnv'),
+      priority: settings.ntfy.priority,
+    },
+    mistral: settings.mistral,
+    browser: settings.browser,
+    jobs,
+    jobsGeneration: settings.jobsGeneration ?? 0,
+  };
+}
+
+export function loadConfig(options?: {
+  configPath?: string;
+  env?: NodeJS.ProcessEnv;
+}): AppConfig {
+  const parsed = loadSeedConfig({ configPath: options?.configPath });
+  const env = options?.env ?? process.env;
+  return toAppConfig(parsed.configPath, parsed.settings, parsed.jobs, env);
+}
+
+export async function loadConfigFromStore(
+  store: BillingStore,
+  options?: { env?: NodeJS.ProcessEnv },
+): Promise<AppConfig> {
+  const settingsDoc = await store.getSettings();
+  const jobs = await store.listJobs();
+  const settings: SeedSettings = {
+    ntfy: settingsDoc.ntfy,
+    mistral: settingsDoc.mistral,
+    browser: settingsDoc.browser,
+    jobsGeneration: settingsDoc.jobsGeneration,
+  };
+  return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env);
 }
