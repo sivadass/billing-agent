@@ -30,6 +30,28 @@ describe('dummyAdapter', () => {
     assert.equal(result.amount, '₹999.00');
     assert.equal(result.accountLabel, '****7890');
   });
+
+  it('applies selector overlays at runtime', async () => {
+    const result = await withBrowser(
+      { headless: true, timeoutMs: 30000, saveErrorScreenshot: false },
+      (page) =>
+        dummyAdapter.run({
+          page,
+          credentials: {},
+          captchaSolver: {
+            solveFromImageBase64: async () => '',
+          },
+          timeoutMs: 30000,
+          logger: createLogger('dummy-test'),
+          fixturePath: resolve('fixtures/dummy-bill.html'),
+          overlay: {
+            amount: '[data-testid="due-date"]',
+          },
+        }),
+    );
+
+    assert.equal(result.amount, '2026-08-31');
+  });
 });
 
 describe('adapter registry', () => {
