@@ -1,5 +1,6 @@
 import { ConfigError } from '../errors.js';
 import { dummyAdapter } from './dummy.js';
+import { tnpdclAdapter } from './tnpdcl.js';
 import type { BillingAdapter } from './types.js';
 
 const adapters = new Map<string, BillingAdapter>();
@@ -18,4 +19,5 @@ export function getAdapter(provider: string): BillingAdapter {
 
 export function registerBuiltInAdapters(): void {
   registerAdapter(dummyAdapter);
+  registerAdapter(tnpdclAdapter);
 }
