@@ -42,6 +42,31 @@ const LOGIN_ERROR_SELECTOR = [
 const MAX_LOGIN_ATTEMPTS = 2;
 
 /**
+ * Clicks a locator and waits for the resulting navigation deterministically.
+ * `page.waitForLoadState('domcontentloaded')` races with the click: since
+ * the current document may already satisfy that load state, `Promise.all`
+ * can resolve before the click's navigation even starts. Waiting for the
+ * `<html>` element to detach instead only resolves once a *new* document
+ * has replaced the current one (full page navigation or reload), so it
+ * fires correctly whether the click leads to a different page or the same
+ * page re-rendered (e.g. a login form re-posted with an error).
+ */
+async function clickAndWaitForNavigation(
+  page: Page,
+  locator: ReturnType<Page['locator']>,
+  timeoutMs: number,
+): Promise<void> {
+  await Promise.all([
+    page
+      .locator('html')
+      .waitFor({ state: 'detached', timeout: timeoutMs })
+      .catch(() => {}),
+    locator.click(),
+  ]);
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+}
+
+/**
  * The post-login bill summary page could NOT be inspected live (it
  * requires a real, registered TNPDCL account) so there are no locked
  * selectors for it. Instead we scrape by matching label text anywhere in
@@ -107,10 +132,7 @@ async function navigateToBillPageIfNeeded(page: Page, ctx: AdapterContext): Prom
       .locator('a', { hasText: /view\s*bill|my\s*bills?|bill\s*details/i })
       .first();
     if ((await billLink.count()) > 0) {
-      await Promise.all([
-        page.waitForLoadState('domcontentloaded'),
-        billLink.click(),
-      ]);
+      await clickAndWaitForNavigation(page, billLink, ctx.timeoutMs);
     }
   } catch (err) {
     ctx.logger.warn('tnpdcl: bill page navigation link not found, scraping current page', {
@@ -157,10 +179,11 @@ async function attemptLoginAndScrape(ctx: AdapterContext): Promise<BillResult> {
   );
   await page.locator(CAPTCHA_INPUT_SELECTOR).fill(captchaText);
 
-  await Promise.all([
-    page.waitForLoadState('domcontentloaded'),
-    page.locator(LOGIN_BUTTON_SELECTOR).click(),
-  ]);
+  await clickAndWaitForNavigation(
+    page,
+    page.locator(LOGIN_BUTTON_SELECTOR),
+    ctx.timeoutMs,
+  );
 
   const stillOnLoginForm = (await page.locator(USERNAME_SELECTOR).count()) > 0;
   if (stillOnLoginForm) {

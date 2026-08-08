@@ -13,7 +13,7 @@ const job: JobConfig = {
   provider: 'fake',
   enabled: true,
   schedule: null,
-  credentials: { username: 'test-user' },
+  credentialsEnv: { username: 'FAKE_JOB_USERNAME' },
   notify: { title: 'Fake bill' },
 };
 
@@ -24,7 +24,7 @@ const app: AppConfig = {
     topic: 'billing',
     priority: 'urgent',
   },
-  mistral: { apiKey: 'test-key', model: 'test-model' },
+  mistral: { apiKeyEnv: 'FAKE_MISTRAL_API_KEY', model: 'test-model' },
   browser: {
     headless: true,
     timeoutMs: 1_000,
@@ -32,6 +32,8 @@ const app: AppConfig = {
   },
   jobs: [job],
 };
+
+const testEnv = { FAKE_JOB_USERNAME: 'test-user' };
 
 const billResult: BillResult = {
   provider: 'fake',
@@ -41,12 +43,12 @@ const billResult: BillResult = {
 };
 
 describe('runJob', () => {
-  it('runs an adapter and sends a default-priority success notification', async () => {
+  it('resolves job credentials and sends a success notification with the configured priority', async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const adapter: BillingAdapter = {
       id: 'fake',
       async run(context) {
-        assert.equal(context.credentials, job.credentials);
+        assert.deepEqual(context.credentials, { username: 'test-user' });
         assert.equal(context.timeoutMs, app.browser.timeoutMs);
         return billResult;
       },
@@ -62,6 +64,7 @@ describe('runJob', () => {
         solveFromImageBase64: async () => 'captcha',
       }),
       getAdapter: () => adapter,
+      env: testEnv,
     });
 
     assert.deepEqual(result, { ok: true, result: billResult });
@@ -72,9 +75,33 @@ describe('runJob', () => {
         title: job.notify.title,
         body:
           'Amount: ₹123.45\nDue: 2026-08-20\nAccount: ****1234',
-        priority: 'default',
+        priority: app.ntfy.priority,
       },
     ]);
+  });
+
+  it('never resolves the Mistral API key for adapters that never solve a captcha', async () => {
+    let solverFactoryCalls = 0;
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    const result = await runJob(app, job, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async () => {},
+      createMistralCaptchaSolver: () => {
+        solverFactoryCalls += 1;
+        return { solveFromImageBase64: async () => 'captcha' };
+      },
+      getAdapter: () => adapter,
+      env: testEnv,
+    });
+
+    assert.deepEqual(result, { ok: true, result: billResult });
+    assert.equal(solverFactoryCalls, 0);
   });
 
   it('returns a login error and sends a high-priority failure notification', async () => {
@@ -97,6 +124,7 @@ describe('runJob', () => {
         solveFromImageBase64: async () => 'captcha',
       }),
       getAdapter: () => adapter,
+      env: testEnv,
     });
 
     assert.deepEqual(result, { ok: false, error: loginError });
@@ -144,6 +172,7 @@ describe('runJob', () => {
           solveFromImageBase64: async () => 'captcha',
         }),
         getAdapter: () => adapter,
+        env: testEnv,
       },
     );
 
@@ -187,6 +216,7 @@ describe('runJob', () => {
           solveFromImageBase64: async () => 'captcha',
         }),
         getAdapter: () => adapter,
+        env: testEnv,
       },
     );
 
@@ -215,6 +245,7 @@ describe('runJob', () => {
         solveFromImageBase64: async () => 'captcha',
       }),
       getAdapter: () => adapter,
+      env: testEnv,
     });
 
     assert.deepEqual(result, { ok: false, error: loginError });
@@ -237,18 +268,18 @@ describe('runJobs', () => {
       {
         ...job,
         id: 'fails',
-        credentials: { marker: 'fails' },
+        credentialsEnv: { marker: 'FAILS_MARKER' },
       },
       {
         ...job,
         id: 'succeeds',
-        credentials: { marker: 'succeeds' },
+        credentialsEnv: { marker: 'SUCCEEDS_MARKER' },
       },
       {
         ...job,
         id: 'disabled',
         enabled: false,
-        credentials: { marker: 'disabled' },
+        credentialsEnv: { marker: 'DISABLED_MARKER' },
       },
     ];
     const adapter: BillingAdapter = {
@@ -272,6 +303,11 @@ describe('runJobs', () => {
           solveFromImageBase64: async () => 'captcha',
         }),
         getAdapter: () => adapter,
+        env: {
+          FAILS_MARKER: 'fails',
+          SUCCEEDS_MARKER: 'succeeds',
+          DISABLED_MARKER: 'disabled',
+        },
       },
     );
 

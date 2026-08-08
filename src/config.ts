@@ -14,7 +14,8 @@ export type JobConfig = {
   provider: string;
   enabled: boolean;
   schedule: string | null;
-  credentials: Record<string, string>;
+  /** Maps credential field name (e.g. "username") to the env var that holds it. Resolved lazily via resolveJobCredentials. */
+  credentialsEnv: Record<string, string>;
   notify: { title: string };
 };
 
@@ -24,15 +25,16 @@ export type ResolvedNtfy = {
   priority: string;
 };
 
-export type ResolvedMistral = {
-  apiKey: string;
+export type MistralConfig = {
+  /** Env var name holding the Mistral API key. Resolved lazily via resolveMistralApiKey. */
+  apiKeyEnv: string;
   model: string;
 };
 
 export type AppConfig = {
   configPath: string;
   ntfy: ResolvedNtfy;
-  mistral: ResolvedMistral;
+  mistral: MistralConfig;
   browser: BrowserConfig;
   jobs: JobConfig[];
 };
@@ -69,7 +71,31 @@ function resolveEnv(env: NodeJS.ProcessEnv, envName: unknown, field: string): st
   return value;
 }
 
-function parseJob(value: unknown, index: number, env: NodeJS.ProcessEnv): JobConfig {
+/** Resolves a job's credentials from the environment. Called lazily by the job runner, not at config load time. */
+export function resolveJobCredentials(
+  job: JobConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const credentials: Record<string, string> = {};
+  for (const [field, envName] of Object.entries(job.credentialsEnv)) {
+    credentials[field] = resolveEnv(
+      env,
+      envName,
+      `jobs.${job.id}.credentials.${field}Env`,
+    );
+  }
+  return credentials;
+}
+
+/** Resolves the Mistral API key from the environment. Called lazily, only when a captcha actually needs solving. */
+export function resolveMistralApiKey(
+  mistral: MistralConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveEnv(env, mistral.apiKeyEnv, 'mistral.apiKeyEnv');
+}
+
+function parseJob(value: unknown, index: number): JobConfig {
   const job = requireObject(value, `jobs[${index}]`);
   const schedule = job.schedule;
   if (schedule !== null && typeof schedule !== 'string') {
@@ -80,15 +106,14 @@ function parseJob(value: unknown, index: number, env: NodeJS.ProcessEnv): JobCon
     job.credentials,
     `jobs[${index}].credentials`,
   );
-  const credentials: Record<string, string> = {};
+  const credentialsEnv: Record<string, string> = {};
   for (const [key, envName] of Object.entries(rawCredentials)) {
     if (!key.endsWith('Env') || key.length === 3) {
       throw new ConfigError(
         `jobs[${index}].credentials.${key} must be an environment reference`,
       );
     }
-    credentials[key.slice(0, -3)] = resolveEnv(
-      env,
+    credentialsEnv[key.slice(0, -3)] = requireString(
       envName,
       `jobs[${index}].credentials.${key}`,
     );
@@ -100,7 +125,7 @@ function parseJob(value: unknown, index: number, env: NodeJS.ProcessEnv): JobCon
     provider: requireString(job.provider, `jobs[${index}].provider`),
     enabled: requireBoolean(job.enabled, `jobs[${index}].enabled`),
     schedule,
-    credentials,
+    credentialsEnv,
     notify: {
       title: requireString(notify.title, `jobs[${index}].notify.title`),
     },
@@ -168,7 +193,7 @@ export function loadConfig(options?: {
           : requireString(ntfy.priority, 'ntfy.priority'),
     },
     mistral: {
-      apiKey: resolveEnv(env, mistral.apiKeyEnv, 'mistral.apiKeyEnv'),
+      apiKeyEnv: requireString(mistral.apiKeyEnv, 'mistral.apiKeyEnv'),
       model:
         mistral.model === undefined
           ? 'mistral-small-latest'
@@ -189,6 +214,6 @@ export function loadConfig(options?: {
             ),
       ...(noSandbox === undefined ? {} : { noSandbox }),
     },
-    jobs: root.jobs.map((job, index) => parseJob(job, index, env)),
+    jobs: root.jobs.map((job, index) => parseJob(job, index)),
   };
 }

@@ -3,8 +3,13 @@ import path from 'node:path';
 import type { BillingAdapter, BillResult } from './adapters/types.js';
 import { getAdapter } from './adapters/registry.js';
 import { withBrowser } from './browser.js';
-import { createMistralCaptchaSolver } from './captcha.js';
-import type { AppConfig, JobConfig } from './config.js';
+import { createMistralCaptchaSolver, type CaptchaSolver } from './captcha.js';
+import {
+  resolveJobCredentials,
+  resolveMistralApiKey,
+  type AppConfig,
+  type JobConfig,
+} from './config.js';
 import { AppError, ConfigError, ScrapeError } from './errors.js';
 import { createLogger } from './logger.js';
 import {
@@ -18,6 +23,7 @@ export type RunnerDeps = {
   sendNtfy: typeof sendNtfy;
   createMistralCaptchaSolver: typeof createMistralCaptchaSolver;
   getAdapter: (provider: string) => BillingAdapter;
+  env: NodeJS.ProcessEnv;
 };
 
 const defaultDeps: RunnerDeps = {
@@ -25,11 +31,37 @@ const defaultDeps: RunnerDeps = {
   sendNtfy,
   createMistralCaptchaSolver,
   getAdapter,
+  env: process.env,
 };
 
 export type RunJobResult =
   | { ok: true; result: BillResult }
   | { ok: false; error: AppError };
+
+/**
+ * Wraps captcha solver creation so the Mistral API key is only resolved (and
+ * the client only constructed) the first time a captcha actually needs
+ * solving. Adapters like `dummy` that never solve a captcha never touch
+ * MISTRAL_API_KEY.
+ */
+function createLazyCaptchaSolver(
+  runnerDeps: RunnerDeps,
+  mistral: AppConfig['mistral'],
+): CaptchaSolver {
+  let solver: CaptchaSolver | undefined;
+  return {
+    async solveFromImageBase64(base64Png: string): Promise<string> {
+      if (!solver) {
+        const apiKey = resolveMistralApiKey(mistral, runnerDeps.env);
+        solver = runnerDeps.createMistralCaptchaSolver({
+          apiKey,
+          model: mistral.model,
+        });
+      }
+      return solver.solveFromImageBase64(base64Png);
+    },
+  };
+}
 
 export async function runJob(
   app: AppConfig,
@@ -39,16 +71,19 @@ export async function runJob(
   const runnerDeps = { ...defaultDeps, ...deps };
   const logger = createLogger(job.id);
   let screenshotPath: string | undefined;
+  const startedAt = Date.now();
   logger.info('job start');
 
   try {
+    const credentials = resolveJobCredentials(job, runnerDeps.env);
+
     const result = await runnerDeps.withBrowser(app.browser, async (page) => {
       try {
         const adapter = runnerDeps.getAdapter(job.provider);
-        const captchaSolver = runnerDeps.createMistralCaptchaSolver(app.mistral);
+        const captchaSolver = createLazyCaptchaSolver(runnerDeps, app.mistral);
         return await adapter.run({
           page,
-          credentials: job.credentials,
+          credentials,
           captchaSolver,
           timeoutMs: app.browser.timeoutMs,
           logger,
@@ -79,8 +114,10 @@ export async function runJob(
       topic: app.ntfy.topic,
       title: job.notify.title,
       body: formatSuccessBody(result),
-      priority: 'default',
+      priority: app.ntfy.priority,
     });
+
+    logger.info('job success', { durationMs: Date.now() - startedAt });
 
     return { ok: true, result };
   } catch (cause) {
@@ -91,6 +128,12 @@ export async function runJob(
             cause instanceof Error ? cause.message : String(cause),
             { cause },
           );
+
+    logger.error('job failed', {
+      durationMs: Date.now() - startedAt,
+      code: error.code,
+      error: error.message,
+    });
 
     try {
       await runnerDeps.sendNtfy({

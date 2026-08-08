@@ -10,7 +10,7 @@ const app: AppConfig = {
     topic: 'billing',
     priority: 'default',
   },
-  mistral: { apiKey: 'test-key', model: 'test-model' },
+  mistral: { apiKeyEnv: 'TEST_MISTRAL_API_KEY', model: 'test-model' },
   browser: {
     headless: true,
     timeoutMs: 1_000,
@@ -22,7 +22,7 @@ const app: AppConfig = {
       provider: 'dummy',
       enabled: true,
       schedule: null,
-      credentials: {},
+      credentialsEnv: {},
       notify: { title: 'Manual bill' },
     },
   ],
