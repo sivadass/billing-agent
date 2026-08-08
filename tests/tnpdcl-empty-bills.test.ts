@@ -80,4 +80,26 @@ describe('firstAdvanceConsumerNoFromHtml', () => {
   it('returns undefined when Advance Payments is absent', () => {
     assert.equal(firstAdvanceConsumerNoFromHtml(oneBillHtml), undefined);
   });
+
+  it('reads direct text in the first td when ui-dt-c div is absent', () => {
+    const html = `
+      <fieldset>
+        <legend>Advance Payments/Others</legend>
+        <table><tbody>
+          <tr><td role="gridcell">0921410333</td><td>USHA</td></tr>
+        </tbody></table>
+      </fieldset>`;
+    assert.equal(firstAdvanceConsumerNoFromHtml(html), '0921410333');
+  });
+
+  it('reads ui-dt-c text when class is not exact ui-dt-c', () => {
+    const html = `
+      <fieldset>
+        <legend>Advance Payments/Others</legend>
+        <table><tbody>
+          <tr><td><div class="foo ui-dt-c">0921410333</div></td></tr>
+        </tbody></table>
+      </fieldset>`;
+    assert.equal(firstAdvanceConsumerNoFromHtml(html), '0921410333');
+  });
 });
