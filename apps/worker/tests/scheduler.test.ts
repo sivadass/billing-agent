@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { AppConfig } from '../src/config.ts';
+import type { AppConfig } from '@billing-agent/core';
 import { startDaemon } from '../src/scheduler.ts';
 
 const app: AppConfig = {

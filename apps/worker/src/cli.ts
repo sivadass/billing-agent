@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import { Command } from 'commander';
-import { registerBuiltInAdapters } from './adapters/registry.js';
-import { loadConfig } from './config.js';
-import { AppError } from './errors.js';
-import { runJobs } from './job-runner.js';
+import {
+  AppError,
+  loadConfig,
+  registerBuiltInAdapters,
+  runJobs,
+} from '@billing-agent/core';
 import { startDaemon } from './scheduler.js';
 
 registerBuiltInAdapters();
