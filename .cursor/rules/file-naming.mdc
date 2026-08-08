@@ -1,0 +1,51 @@
+---
+description: Enforce kebab-case naming for all files
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# File Naming Convention
+
+All files, regardless of extension, must use **kebab-case**.
+
+## Rules
+
+- Use lowercase letters only.
+- Separate words with a single hyphen (`-`).
+- No underscores (`_`), no camelCase, no PascalCase, no spaces.
+- Numbers are allowed but should not start a filename.
+- The extension itself is unaffected (keep `.tsx`, `.test.ts`, `.d.ts`, etc. as-is).
+
+## Examples
+
+✅ Correct
+- `user-profile.tsx`
+- `use-auth-hook.ts`
+- `api-client.ts`
+- `payment-summary-card.tsx`
+- `date-utils.test.ts`
+- `button-group.module.css`
+
+❌ Incorrect
+- `UserProfile.tsx`
+- `useAuthHook.ts`
+- `apiClient.ts`
+- `payment_summary_card.tsx`
+- `DateUtils.test.ts`
+- `ButtonGroup.module.css`
+
+## Exceptions
+
+- Standard root-level config/meta files may keep their conventional names
+  (e.g. `README.md`, `LICENSE`, `Dockerfile`, `CHANGELOG.md`).
+- Framework-mandated filenames (e.g. Next.js `page.tsx`, `layout.tsx`,
+  `[id].tsx` dynamic routes) are exempt since the name is structurally required.
+
+## When generating or renaming files
+
+- Always propose kebab-case filenames when creating new files.
+- If asked to rename an existing non-conforming file, suggest the kebab-case
+  equivalent and update all imports/references accordingly.
+- Component files still use PascalCase for the **exported component name**
+  inside the file — only the filename itself must be kebab-case
+  (e.g. file `user-profile.tsx` exports `export function UserProfile() {}`).
