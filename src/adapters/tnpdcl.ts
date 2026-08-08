@@ -89,6 +89,66 @@ const FIELD_PATTERNS: Record<string, RegExp[]> = {
   status: [/(?:bill\s*)?status\s*[:\-]?\s*(paid|unpaid|due|pending|overdue)/i],
 };
 
+export const BILL_PAYMENTS_TBODY_ID = 'form:selectedbill_data';
+export const DISCONNECTED_TBODY_ID = 'form:selectedbillr_data';
+
+export function isNoRecordsEmptyMessage(text: string): boolean {
+  return /no\s+records\s+found/i.test(text.trim());
+}
+
+/**
+ * Extract inner HTML of `<tbody id="{tbodyId}">...</tbody>`.
+ * Returns null if the opening tag is not found.
+ */
+function extractTbodyInnerHtml(html: string, tbodyId: string): string | null {
+  const open = new RegExp(
+    `<tbody\\b[^>]*\\bid=["']${tbodyId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*>`,
+    'i',
+  );
+  const openMatch = open.exec(html);
+  if (!openMatch || openMatch.index === undefined) return null;
+  const start = openMatch.index + openMatch[0].length;
+  const close = html.slice(start).search(/<\/tbody>/i);
+  if (close < 0) return null;
+  return html.slice(start, start + close);
+}
+
+export function dataTableIsEmptyInHtml(
+  html: string,
+  tbodyId: string,
+): boolean | null {
+  const inner = extractTbodyInnerHtml(html, tbodyId);
+  if (inner === null) return null;
+  const hasEmptyClass = /ui-datatable-empty-message/i.test(inner);
+  const hasNoRecords = isNoRecordsEmptyMessage(
+    inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '),
+  );
+  return hasEmptyClass && hasNoRecords;
+}
+
+export function hasNoPendingBillsInHtml(html: string): boolean {
+  const bills = dataTableIsEmptyInHtml(html, BILL_PAYMENTS_TBODY_ID);
+  const disconnected = dataTableIsEmptyInHtml(html, DISCONNECTED_TBODY_ID);
+  return bills === true && disconnected === true;
+}
+
+export function firstAdvanceConsumerNoFromHtml(html: string): string | undefined {
+  const fieldsetRe =
+    /<fieldset\b[^>]*>[\s\S]*?<legend\b[^>]*>[\s\S]*?Advance Payments[\s\S]*?<\/legend>([\s\S]*?)<\/fieldset>/i;
+  const fieldsetMatch = fieldsetRe.exec(html);
+  if (!fieldsetMatch?.[1]) return undefined;
+  const body = fieldsetMatch[1];
+  const rowRe =
+    /<tr\b(?![^>]*ui-datatable-empty-message)[^>]*>([\s\S]*?)<\/tr>/i;
+  const rowMatch = rowRe.exec(body);
+  if (!rowMatch?.[1]) return undefined;
+  const cellMatch = /<div class="ui-dt-c">\s*([^<]+?)\s*<\/div>/i.exec(
+    rowMatch[1],
+  );
+  const value = cellMatch?.[1]?.trim();
+  return value || undefined;
+}
+
 /** `1234567890` -> `****7890`. Exported for unit testing and reuse by notify formatting. */
 export function maskAccount(id: string): string {
   const trimmed = id.trim();
