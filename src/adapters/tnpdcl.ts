@@ -23,6 +23,16 @@ const CAPTCHA_INPUT_SELECTOR = '#CaptchaID';
 const CAPTCHA_IMAGE_SELECTOR = '#CaptchaImgID';
 // <input name="submit" type="submit" value="Login" ... />
 const LOGIN_BUTTON_SELECTOR = 'input[name="submit"][type="submit"]';
+// Only inspect dedicated messages inside the login form. The full page always
+// contains captcha instructions, which makes body-text classification unsafe.
+const LOGIN_ERROR_SELECTOR = [
+  '#lin .ui-messages-error-summary',
+  '#lin .ui-messages-error-detail',
+  '#lin .ui-message-error-detail',
+  '#lin [role="alert"]',
+  '#lin .error',
+  '#lin .errors',
+].join(', ');
 // The form (`#lin`, action="/awp/logincheck") runs `encryptPassword()` in
 // its onsubmit handler, which obfuscates the plaintext password in-place
 // before the real POST. We only need to `fill()` the plaintext password;
@@ -57,7 +67,14 @@ const FIELD_PATTERNS: Record<string, RegExp[]> = {
 /** `1234567890` -> `****7890`. Exported for unit testing and reuse by notify formatting. */
 export function maskAccount(id: string): string {
   const trimmed = id.trim();
+  if (trimmed.length <= 4) return '****';
   return `****${trimmed.slice(-4)}`;
+}
+
+export function classifyLoginFailure(message: string): 'captcha' | 'login' {
+  const captchaRejection =
+    /\bcaptcha(?:\s+(?:code|response|text|value|entry))?\s*(?:is|was|:|-)?\s*(?:invalid|incorrect|wrong|mismatch(?:ed)?)\b|\b(?:invalid|incorrect|wrong|mismatch(?:ed)?)\s+(?:for\s+)?(?:the\s+)?captcha\b/i;
+  return captchaRejection.test(message.trim()) ? 'captcha' : 'login';
 }
 
 function tryExtractField(pageText: string, patterns: RegExp[]): string | undefined {
@@ -147,8 +164,8 @@ async function attemptLoginAndScrape(ctx: AdapterContext): Promise<BillResult> {
 
   const stillOnLoginForm = (await page.locator(USERNAME_SELECTOR).count()) > 0;
   if (stillOnLoginForm) {
-    const bodyText = (await page.locator('body').innerText()).toLowerCase();
-    if (/captcha/.test(bodyText) && /invalid|incorrect|wrong|mismatch/.test(bodyText)) {
+    const messages = await page.locator(LOGIN_ERROR_SELECTOR).allInnerTexts();
+    if (messages.some((message) => classifyLoginFailure(message) === 'captcha')) {
       throw new CaptchaError('tnpdcl login rejected the captcha response');
     }
     throw new LoginError('tnpdcl login failed: still on login page after submit');
