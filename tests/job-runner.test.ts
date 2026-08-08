@@ -80,6 +80,38 @@ describe('runJob', () => {
     ]);
   });
 
+  it('skips success notification when result.notify is false', async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const quietResult: BillResult = {
+      provider: 'fake',
+      amount: '₹0',
+      status: 'no pending bills',
+      accountLabel: '****1234',
+      notify: false,
+    };
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return quietResult;
+      },
+    };
+
+    const result = await runJob(app, job, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async (options) => {
+        notifications.push(options);
+      },
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+    });
+
+    assert.deepEqual(result, { ok: true, result: quietResult });
+    assert.deepEqual(notifications, []);
+  });
+
   it('never resolves the Mistral API key for adapters that never solve a captcha', async () => {
     let solverFactoryCalls = 0;
     const adapter: BillingAdapter = {

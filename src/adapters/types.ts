@@ -10,6 +10,8 @@ export type BillResult = {
   status?: string;
   accountLabel: string;
   rawNotes?: string;
+  /** When false, job-runner skips success ntfy. Default: notify. */
+  notify?: boolean;
 };
 
 export type AdapterContext = {

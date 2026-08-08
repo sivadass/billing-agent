@@ -109,15 +109,20 @@ export async function runJob(
       }
     });
 
-    await runnerDeps.sendNtfy({
-      baseUrl: app.ntfy.baseUrl,
-      topic: app.ntfy.topic,
-      title: job.notify.title,
-      body: formatSuccessBody(result),
-      priority: app.ntfy.priority,
-    });
+    if (result.notify !== false) {
+      await runnerDeps.sendNtfy({
+        baseUrl: app.ntfy.baseUrl,
+        topic: app.ntfy.topic,
+        title: job.notify.title,
+        body: formatSuccessBody(result),
+        priority: app.ntfy.priority,
+      });
+    }
 
-    logger.info('job success', { durationMs: Date.now() - startedAt });
+    logger.info('job success', {
+      durationMs: Date.now() - startedAt,
+      ...(result.notify === false ? { notifySkipped: true } : {}),
+    });
 
     return { ok: true, result };
   } catch (cause) {
