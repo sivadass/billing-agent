@@ -145,3 +145,8 @@ vite.config.ts.timestamp-*
 .superpowers
 docs/specs/
 docs/plans/
+
+# Billing agent local secrets / runtime
+jobs.json
+tmp/
+!.env.example

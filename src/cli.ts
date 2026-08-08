@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+import 'dotenv/config';
+import { Command } from 'commander';
+import { registerBuiltInAdapters } from './adapters/registry.js';
+import { loadConfig } from './config.js';
+import { AppError } from './errors.js';
+import { runJobs } from './job-runner.js';
+import { startDaemon } from './scheduler.js';
+
+registerBuiltInAdapters();
+
+const program = new Command();
+
+program.name('billing-agent').description('Cron-friendly billing notifier');
+
+/**
+ * Runs a CLI action, printing AppError (config/usage/runtime) failures as a
+ * plain message with exit code 2 instead of an unhandled-rejection stack trace.
+ */
+function withErrorHandling<Args extends unknown[]>(
+  action: (...args: Args) => Promise<void>,
+): (...args: Args) => Promise<void> {
+  return async (...args: Args) => {
+    try {
+      await action(...args);
+    } catch (error) {
+      if (error instanceof AppError) {
+        console.error(error.message);
+        process.exitCode = 2;
+        return;
+      }
+      throw error;
+    }
+  };
+}
+
+program
+  .command('run')
+  .option('--config <path>', 'path to jobs.json', 'jobs.json')
+  .option('--job <id>', 'run a single job id')
+  .option('--all', 'run all enabled jobs')
+  .action(
+    withErrorHandling(
+      async (options: { config: string; job?: string; all?: boolean }) => {
+        if (!options.job && !options.all) {
+          console.error('Specify --job <id> or --all');
+          process.exitCode = 2;
+          return;
+        }
+
+        const app = loadConfig({ configPath: options.config });
+        const jobIds = options.all ? 'all' : [options.job as string];
+        const { failed } = await runJobs(app, jobIds);
+        process.exitCode = failed > 0 ? 1 : 0;
+      },
+    ),
+  );
+
+program
+  .command('daemon')
+  .option('--config <path>', 'path to jobs.json', 'jobs.json')
+  .action(
+    withErrorHandling(async (options: { config: string }) => {
+      const app = loadConfig({ configPath: options.config });
+      await startDaemon(app);
+    }),
+  );
+
+await program.parseAsync(process.argv);
