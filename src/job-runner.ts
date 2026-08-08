@@ -5,7 +5,7 @@ import { getAdapter } from './adapters/registry.js';
 import { withBrowser } from './browser.js';
 import { createMistralCaptchaSolver } from './captcha.js';
 import type { AppConfig, JobConfig } from './config.js';
-import { AppError, ScrapeError } from './errors.js';
+import { AppError, ConfigError, ScrapeError } from './errors.js';
 import { createLogger } from './logger.js';
 import {
   formatFailureBody,
@@ -55,9 +55,10 @@ export async function runJob(
         });
       } catch (cause) {
         if (app.browser.saveErrorScreenshot) {
+          const safeJobId = job.id.replace(/[^a-zA-Z0-9_-]/g, '_');
           const candidatePath = path.join(
             'tmp',
-            `${job.id}-${Date.now()}.png`,
+            `${safeJobId}-${Date.now()}.png`,
           );
           try {
             await mkdir(path.dirname(candidatePath), { recursive: true });
@@ -117,7 +118,11 @@ export async function runJobs(
   const selectedJobs =
     jobIds === 'all'
       ? app.jobs.filter((job) => job.enabled)
-      : app.jobs.filter((job) => jobIds.includes(job.id));
+      : jobIds.map((jobId) => {
+          const job = app.jobs.find((candidate) => candidate.id === jobId);
+          if (!job) throw new ConfigError(`Unknown job id: ${jobId}`);
+          return job;
+        });
   let failed = 0;
 
   for (const job of selectedJobs) {

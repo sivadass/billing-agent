@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
-import { LoginError } from '../src/errors.ts';
+import { ConfigError, LoginError } from '../src/errors.ts';
 import { runJob, runJobs } from '../src/job-runner.ts';
 
 const job: JobConfig = {
@@ -158,6 +158,44 @@ describe('runJob', () => {
     );
   });
 
+  it('sanitizes the job id used in error screenshot paths', async () => {
+    let screenshotPath: string | undefined;
+    const unsafeJob = { ...job, id: '../nested/evil?' };
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        throw new LoginError('login failed');
+      },
+    };
+    const page = {
+      screenshot: async (options: { path: string }) => {
+        screenshotPath = options.path;
+        return Buffer.alloc(0);
+      },
+    } as unknown as Page;
+
+    await runJob(
+      {
+        ...app,
+        browser: { ...app.browser, saveErrorScreenshot: true },
+      },
+      unsafeJob,
+      {
+        withBrowser: async (_config, callback) => callback(page),
+        sendNtfy: async () => {},
+        createMistralCaptchaSolver: () => ({
+          solveFromImageBase64: async () => 'captcha',
+        }),
+        getAdapter: () => adapter,
+      },
+    );
+
+    assert.match(
+      screenshotPath ?? '',
+      /^tmp\/___nested_evil_-\d+\.png$/,
+    );
+  });
+
   it('returns the job error when the failure notification also fails', async () => {
     const loginError = new LoginError('login failed');
     const adapter: BillingAdapter = {
@@ -184,6 +222,15 @@ describe('runJob', () => {
 });
 
 describe('runJobs', () => {
+  it('throws a config error for an unknown requested job id', async () => {
+    await assert.rejects(
+      runJobs(app, ['missing-job']),
+      (error: unknown) =>
+        error instanceof ConfigError &&
+        error.message === 'Unknown job id: missing-job',
+    );
+  });
+
   it('runs all enabled jobs and continues after failures', async () => {
     const attempted: string[] = [];
     const jobs: JobConfig[] = [
