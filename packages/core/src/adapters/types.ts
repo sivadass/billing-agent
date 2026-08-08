@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { CaptchaSolver } from '../captcha.js';
 import type { Logger } from '../logger.js';
+import type { SelectorOverlay } from '../overlay.js';
 
 export type BillResult = {
   provider: string;
@@ -20,6 +21,7 @@ export type AdapterContext = {
   captchaSolver: CaptchaSolver;
   timeoutMs: number;
   logger: Logger;
+  overlay?: SelectorOverlay;
   fixturePath?: string;
 };
 

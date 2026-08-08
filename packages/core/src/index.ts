@@ -9,5 +9,6 @@ export * from './errors.js';
 export * from './job-runner.js';
 export * from './logger.js';
 export * from './notify.js';
+export * from './overlay.js';
 export * from './store/mongo.js';
 export * from './store/types.js';
