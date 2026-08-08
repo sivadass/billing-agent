@@ -2,7 +2,7 @@ import { Mistral } from '@mistralai/mistralai';
 import type { ChatCompletionRequest } from '@mistralai/mistralai/models/components/chatcompletionrequest.js';
 import type { ChatCompletionResponse } from '@mistralai/mistralai/models/components/chatcompletionresponse.js';
 import type { ContentChunk } from '@mistralai/mistralai/models/components/contentchunk.js';
-import { CaptchaError } from './errors.ts';
+import { CaptchaError } from './errors.js';
 
 const CAPTCHA_PROMPT =
   'Read the captcha image. Reply with only the captcha characters. No spaces, no punctuation, no explanation.';

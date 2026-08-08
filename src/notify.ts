@@ -1,5 +1,5 @@
-import type { BillResult } from './adapters/types.ts';
-import { NotifyError } from './errors.ts';
+import type { BillResult } from './adapters/types.js';
+import { NotifyError } from './errors.js';
 
 const RETRY_DELAY_MS = 250;
 
