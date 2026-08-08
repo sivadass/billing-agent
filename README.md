@@ -176,6 +176,44 @@ npm test
 
 Unit tests cover config, captcha, notify (mocked HTTP), job runner, dummy adapter (fixture + real Chromium), and TNPDCL helpers. Live TNPDCL login is **not** run in CI—verify `home-eb` manually with real credentials.
 
+## Deploy on Coolify
+
+This app is a long-running **daemon** (no HTTP server). Use a Dockerfile build, not Nixpacks.
+
+Repo already includes:
+
+| File | Purpose |
+| --- | --- |
+| `Dockerfile` | Playwright base image + build + `daemon` CMD |
+| `.dockerignore` | Keeps secrets and local `jobs.json` out of the image |
+| `jobs.coolify.json` | Production job config with `browser.noSandbox: true` |
+
+### Coolify setup
+
+1. **New Resource → Application** from this Git repo.
+2. Build pack: **Dockerfile** (not Nixpacks). Dockerfile location: `/Dockerfile`.
+3. **Disable health checks** (no HTTP endpoint to probe).
+4. **No public domain / ports** required — leave Ports Exposes empty or ignore proxy settings.
+5. **Environment variables** (Runtime, not Build):
+
+   | Variable | Required |
+   | --- | --- |
+   | `NTFY_TOPIC` | yes |
+   | `MISTRAL_API_KEY` | yes (for `tnpdcl`) |
+   | `TNPDCL_USERNAME` | yes |
+   | `TNPDCL_PASSWORD` | yes |
+
+6. **Resources:** give the container **≥1 GB RAM** (Chromium spikes briefly per run).
+7. Deploy. Confirm logs show the scheduler started (e.g. waiting for `0 9 * * *`).
+
+Optional one-shot smoke after deploy (Coolify terminal / exec):
+
+```bash
+node dist/cli.js run --job home-eb --config jobs.json
+```
+
+To change schedules or enable `smoke-test`, edit `jobs.coolify.json` and redeploy (or mount a custom `jobs.json` via Coolify persistent storage over `/app/jobs.json`).
+
 ## Further reading
 
 Architecture and config schema: `docs/superpowers/specs/2026-08-08-billing-agent-design.md`

@@ -1,0 +1,38 @@
+{
+  "ntfy": {
+    "baseUrl": "https://ntfy.sh",
+    "topicEnv": "NTFY_TOPIC",
+    "priority": "default"
+  },
+  "mistral": {
+    "apiKeyEnv": "MISTRAL_API_KEY",
+    "model": "mistral-small-latest"
+  },
+  "browser": {
+    "headless": true,
+    "timeoutMs": 60000,
+    "saveErrorScreenshot": true,
+    "noSandbox": true
+  },
+  "jobs": [
+    {
+      "id": "home-eb",
+      "provider": "tnpdcl",
+      "enabled": true,
+      "schedule": "0 9 * * *",
+      "credentials": {
+        "usernameEnv": "TNPDCL_USERNAME",
+        "passwordEnv": "TNPDCL_PASSWORD"
+      },
+      "notify": { "title": "TNPDCL Bill" }
+    },
+    {
+      "id": "smoke-test",
+      "provider": "dummy",
+      "enabled": false,
+      "schedule": null,
+      "credentials": {},
+      "notify": { "title": "Dummy Bill" }
+    }
+  ]
+}
