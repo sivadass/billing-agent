@@ -16,7 +16,7 @@ The app is organized into hubs under a router shell:
 
 Notes:
 
-- All hubs except `/login` require a JWT (protected layout + Log out in the header).
+- All hubs except `/login` require a JWT (protected layout + avatar account menu with email and Log out).
 - Schedules are shown in humanized form in tables, but edited as raw cron in forms.
 - Empty schedule means manual-only (`null` in API payloads).
 - Job disable is soft-disable only (`DELETE /jobs/:id` sets `enabled: false`).

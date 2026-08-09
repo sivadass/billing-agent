@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppShellLayout } from './app';
 import { TOKEN_STORAGE_KEY } from './lib/auth-token';
 
@@ -8,10 +8,20 @@ vi.mock('./lib/auth-token', async () => {
   const actual = await vi.importActual<typeof import('./lib/auth-token')>('./lib/auth-token');
   return {
     ...actual,
-    getAccessToken: () => 'test-token',
     getApiBaseUrl: () => 'http://127.0.0.1:8080',
   };
 });
+
+function encodeSegment(value: object): string {
+  return btoa(JSON.stringify(value))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function makeToken(payload: object): string {
+  return `${encodeSegment({ alg: 'none' })}.${encodeSegment(payload)}.sig`;
+}
 
 describe('App shell routes', () => {
   beforeAll(() => {
@@ -27,7 +37,18 @@ describe('App shell routes', () => {
       readonly thresholds = [];
     }
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
-    sessionStorage.setItem(TOKEN_STORAGE_KEY, 'test-token');
+  });
+
+  beforeEach(() => {
+    sessionStorage.setItem(
+      TOKEN_STORAGE_KEY,
+      makeToken({ sub: 'user-1', email: 'you@example.com' }),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    sessionStorage.clear();
   });
 
   it('renders Jobs hub at /jobs without Settings', () => {
@@ -41,7 +62,9 @@ describe('App shell routes', () => {
       </MemoryRouter>,
     );
     expect(screen.getByText('Jobs hub heading')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /log out/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /account menu/i }));
+    expect(screen.getByText('you@example.com')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /log out/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^settings$/i })).not.toBeInTheDocument();
   });
 });

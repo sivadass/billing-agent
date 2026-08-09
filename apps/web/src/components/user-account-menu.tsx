@@ -9,7 +9,7 @@ const ACCOUNT_META_STYLE: CSSProperties = {
   borderBottom: '1px solid var(--gray-100)',
 };
 
-const LOGOUT_ITEM = [{ label: 'Log out', value: 'logout', icon: 'logout' as const }];
+const LOGOUT_ITEM = [{ label: 'Log out', value: '#logout', icon: 'logout' as const }];
 
 export type UserAccountMenuProps = {
   onLogout: () => void;

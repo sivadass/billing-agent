@@ -1,4 +1,4 @@
-import { AppShell, Button, Container } from 'cleanplate';
+import { AppShell, Container } from 'cleanplate';
 import {
   BrowserRouter,
   Navigate,
@@ -9,6 +9,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { ProtectedRoute } from './components/protected-route';
+import { UserAccountMenu } from './components/user-account-menu';
 import { clearAccessToken } from './lib/auth-token';
 import { JobFormPage } from './pages/job-form-page';
 import { JobsPage } from './pages/jobs-page';
@@ -76,11 +77,7 @@ export function AppShellLayout() {
         activeMenuItem: activeMenu,
         onMenuItemClick: onMenuClick,
         showCenterMenu: false,
-        headerRight: (
-          <Button variant="outline" size="small" onClick={onLogout}>
-            Log out
-          </Button>
-        ),
+        headerRight: <UserAccountMenu onLogout={onLogout} />,
       }}
     >
       <Container className={styles['app-root']} padding="4">
