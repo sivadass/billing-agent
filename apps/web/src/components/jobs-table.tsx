@@ -1,4 +1,13 @@
-import { Badge, Button, ConfirmDialog, Container, Table } from 'cleanplate';
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  Container,
+  Dropdown,
+  Icon,
+  MenuList,
+  Table,
+} from 'cleanplate';
 import { useMemo, useState } from 'react';
 import { humanizeCron } from '../lib/cron-humanize';
 import type { JobDocument } from '../lib/types';
@@ -22,6 +31,50 @@ type JobsTableRow = {
   notifyTitle: string;
   job: JobDocument;
 };
+
+type JobRowMoreMenuProps = {
+  row: JobsTableRow;
+  onEdit: (job: JobDocument) => void;
+  onEnable: (job: JobDocument) => Promise<void> | void;
+  onRequestDisable: (job: JobDocument) => void;
+  onClose?: () => void;
+  className?: string;
+};
+
+function JobRowMoreMenu({
+  row,
+  onEdit,
+  onEnable,
+  onRequestDisable,
+  onClose,
+  className,
+}: JobRowMoreMenuProps) {
+  const items = [
+    { label: 'Edit', value: 'edit', icon: 'edit' as const },
+    row.enabled
+      ? { label: 'Disable', value: 'disable', icon: 'cancel' as const }
+      : { label: 'Enable', value: 'enable', icon: 'check_circle' as const },
+  ];
+
+  return (
+    <MenuList
+      className={className}
+      direction="vertical"
+      size="small"
+      items={items}
+      onMenuClick={(item) => {
+        if (item.value === 'edit') {
+          onEdit(row.job);
+        } else if (item.value === 'disable') {
+          onRequestDisable(row.job);
+        } else if (item.value === 'enable') {
+          void onEnable(row.job);
+        }
+        onClose?.();
+      }}
+    />
+  );
+}
 
 export function JobsTable({
   jobs,
@@ -48,26 +101,37 @@ export function JobsTable({
   );
 
   const renderActions = (row: JobsTableRow) => (
-    <Container className={styles.actions} padding="0">
+    <Container className={styles.actions} padding="0" display="flex" align="center" gap="2">
       <Button
-        variant="outline"
+        variant="solid"
+        size="small"
         onClick={() => void onRun(row.job)}
         isDisabled={!row.enabled || runningJobId === row.id}
+        isLoading={runningJobId === row.id}
       >
         Run
       </Button>
-      <Button variant="outline" onClick={() => onEdit(row.job)}>
-        Edit
-      </Button>
-      {row.enabled ? (
-        <Button variant="outline" onClick={() => setDisableTarget(row.job)}>
-          Disable
-        </Button>
-      ) : (
-        <Button variant="outline" onClick={() => void onEnable(row.job)}>
-          Enable
-        </Button>
-      )}
+      <Dropdown
+        placement="bottom-end"
+        offset={8}
+        trigger={
+          <Button
+            variant="icon"
+            size="small"
+            aria-label={`More actions for ${row.id}`}
+          >
+            <Icon name="more_vert" />
+          </Button>
+        }
+        content={
+          <JobRowMoreMenu
+            row={row}
+            onEdit={onEdit}
+            onEnable={onEnable}
+            onRequestDisable={setDisableTarget}
+          />
+        }
+      />
     </Container>
   );
 

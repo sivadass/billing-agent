@@ -1,0 +1,22 @@
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.filter-field {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .filters {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+
+  .filter-field {
+    flex: 1 1 0;
+  }
+}

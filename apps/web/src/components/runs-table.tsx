@@ -1,4 +1,5 @@
 import { Badge, Table } from 'cleanplate';
+import { humanizeTimestamp } from '../lib/timestamp-humanize';
 import type { RunDocument } from '../lib/types';
 
 type RunsTableProps = {
@@ -31,7 +32,7 @@ function formatDuration(durationMs: number | null): string {
 
 export function RunsTable({ runs, onSelectRun }: RunsTableProps) {
   const rows: RunsTableRow[] = runs.map((run) => {
-    const startedAtLabel = new Date(run.startedAt).toLocaleString();
+    const startedAtLabel = humanizeTimestamp(run.startedAt);
     const durationLabel = formatDuration(run.durationMs);
     return {
       id: run.id,
@@ -65,7 +66,18 @@ export function RunsTable({ runs, onSelectRun }: RunsTableProps) {
             );
           },
         },
-        { id: 'startedAtLabel', title: 'Started' },
+        {
+          id: 'startedAtLabel',
+          title: 'Started',
+          customRender: (raw) => {
+            const row = raw as RunsTableRow;
+            return (
+              <span title={new Date(row.run.startedAt).toLocaleString()}>
+                {row.startedAtLabel}
+              </span>
+            );
+          },
+        },
         { id: 'durationLabel', title: 'Duration' },
       ]}
       data={rows}

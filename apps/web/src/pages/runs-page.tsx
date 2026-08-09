@@ -5,6 +5,7 @@ import { RunsTable } from '../components/runs-table';
 import { listJobs } from '../lib/jobs-api';
 import { listRuns } from '../lib/runs-api';
 import type { JobDocument, RunDocument } from '../lib/types';
+import styles from './runs-page.module.scss';
 
 type SelectOption = { label: string; value: string };
 
@@ -75,28 +76,34 @@ export function RunsPage() {
         title="Runs"
         subtitle="Track job executions and drill into run details."
       />
-      <FormControls.Select
-        label="Job filter"
-        options={jobOptions}
-        value={selectedJobOption}
-        onChange={(selected) => {
-          if (selected && !Array.isArray(selected)) {
-            setSelectedJobId(String(selected.value));
-          }
-        }}
-        margin="t-3"
-      />
-      <FormControls.Select
-        label="Status filter"
-        options={STATUS_OPTIONS}
-        value={selectedStatusOption}
-        onChange={(selected) => {
-          if (selected && !Array.isArray(selected)) {
-            setSelectedStatus(String(selected.value));
-          }
-        }}
-        margin="t-3"
-      />
+      <div className={styles.filters}>
+        <div className={styles['filter-field']}>
+          <FormControls.Select
+            label="Job filter"
+            options={jobOptions}
+            value={selectedJobOption}
+            onChange={(selected) => {
+              if (selected && !Array.isArray(selected)) {
+                setSelectedJobId(String(selected.value));
+              }
+            }}
+            isFluid
+          />
+        </div>
+        <div className={styles['filter-field']}>
+          <FormControls.Select
+            label="Status filter"
+            options={STATUS_OPTIONS}
+            value={selectedStatusOption}
+            onChange={(selected) => {
+              if (selected && !Array.isArray(selected)) {
+                setSelectedStatus(String(selected.value));
+              }
+            }}
+            isFluid
+          />
+        </div>
+      </div>
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
       {isLoading ? <Spinner margin="t-3" /> : null}
       {!isLoading && !error ? (

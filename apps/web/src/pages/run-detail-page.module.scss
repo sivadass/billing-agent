@@ -4,8 +4,20 @@
   max-width: 56rem;
 }
 
+.content-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
 .status-banner {
   background-color: var(--white);
+}
+
+.status-copy {
+  display: flex;
+  flex-direction: column;
 }
 
 .metrics-row {
@@ -13,8 +25,8 @@
 }
 
 .metric {
-  flex: 1 1 10rem;
-  min-width: 10rem;
+  flex: 1 1 11rem;
+  min-width: 11rem;
   background-color: var(--white);
 }
 
@@ -22,56 +34,63 @@
   background-color: var(--white);
 }
 
+.section-title {
+  color: var(--text-default);
+  font-weight: 600;
+}
+
 .fields-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-5) var(--space-6);
 }
 
 .detail-field {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .detail-label {
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--text-subtle);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .detail-value {
   color: var(--text-default);
+  line-height: 1.5;
+}
+
+.detail-value-em {
+  color: var(--text-default);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .detail-value-mono {
-  color: var(--text-default);
+  color: var(--gray-700);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.875rem;
+  line-height: 1.5;
   word-break: break-all;
 }
 
 .bill-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: var(--space-4);
-}
-
-.bill-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.bill-value {
-  color: var(--text-default);
-  word-break: break-word;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-5) var(--space-6);
 }
 
 .polling-hint {
-  color: var(--text-muted);
+  color: var(--text-subtle);
 }
 
 .muted {
-  color: var(--text-muted);
+  color: var(--text-subtle);
+  line-height: 1.5;
 }
