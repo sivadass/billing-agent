@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AppShell, Container, MenuListItem, Typography } from 'cleanplate';
+import { AppShell, Container, Typography } from 'cleanplate';
 import {
   BrowserRouter,
   Navigate,
@@ -16,7 +16,7 @@ import { RunsPage } from './pages/runs-page';
 import { StatusPage } from './pages/status-page';
 import styles from './app.module.scss';
 
-const MENU: MenuListItem[] = [
+const MENU: Array<{ label: string; value: string; icon: any }> = [
   { label: 'Jobs', value: '/jobs', icon: 'work' },
   { label: 'Runs', value: '/runs', icon: 'history' },
   { label: 'Status', value: '/status', icon: 'monitor_heart' },
@@ -36,7 +36,7 @@ export function AppLayout() {
   const location = useLocation();
   const activeMenu = MENU.find((item) => location.pathname.startsWith(item.value))?.value ?? '/jobs';
 
-  const onMenuClick = (item: MenuListItem) => {
+  const onMenuClick = (item: { value: string }) => {
     navigate(item.value);
   };
 
