@@ -10,7 +10,7 @@ import {
   registerBuiltInAdapters,
   runJobs,
 } from '@billing-agent/core';
-import { startServer } from '@billing-agent/api';
+import { parseCorsOrigins, startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
 
 registerBuiltInAdapters();
@@ -98,6 +98,7 @@ program
       port: resolveHttpPort(),
       token: requireApiToken(),
       store,
+      corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
     });
 
     try {
