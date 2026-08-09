@@ -3,11 +3,19 @@ export type SelectorOverlayPatch = Record<string, SelectorOverlayValue>;
 
 export type JobDocument = {
   id: string;
+  userId: string;
   provider: string;
   enabled: boolean;
   schedule: string | null;
   credentialsEnv: Record<string, string>;
   notify: { title: string };
+};
+
+export type UserDocument = {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: string;
 };
 
 export type SettingsDocument = {
@@ -45,6 +53,7 @@ export type OverlayDocument = {
 export type RunDocument = {
   id: string;
   jobId: string;
+  userId: string;
   provider: string;
   status: 'running' | 'success' | 'failed';
   startedAt: string;
@@ -68,7 +77,7 @@ export type OverlaySuccessInput = {
 
 export interface BillingStore {
   getSettings(): Promise<SettingsDocument>;
-  listJobs(): Promise<JobDocument[]>;
+  listJobs(options?: { userId?: string }): Promise<JobDocument[]>;
   getJob(id: string): Promise<JobDocument | null>;
   upsertJob(job: JobDocument): Promise<void>;
   upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void>;
@@ -80,7 +89,13 @@ export interface BillingStore {
   recordOverlaySuccess(input: OverlaySuccessInput): Promise<OverlayDocument>;
   createRun(run: RunDocument): Promise<void>;
   finishRun(id: string, update: Partial<RunDocument>): Promise<void>;
-  listRuns(options?: { jobId?: string; limit?: number }): Promise<RunDocument[]>;
+  listRuns(options?: {
+    userId?: string;
+    jobId?: string;
+    limit?: number;
+  }): Promise<RunDocument[]>;
   getRun(id: string): Promise<RunDocument | null>;
+  findUserByEmail(email: string): Promise<UserDocument | null>;
+  getUser(id: string): Promise<UserDocument | null>;
   close(): Promise<void>;
 }

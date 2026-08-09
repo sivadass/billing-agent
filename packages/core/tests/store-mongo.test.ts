@@ -7,6 +7,7 @@ import type {
   RunDocument,
   SelectorOverlayPatch,
   SettingsDocument,
+  UserDocument,
 } from '../src/store/types.ts';
 
 type Query<T> = Partial<{ [K in keyof T]: T[K] }>;
@@ -86,22 +87,26 @@ class MemoryCollection<T extends Record<string, unknown>> {
 }
 
 function createStore() {
-  return createBillingStoreFromCollections(
+  const users = new MemoryCollection<UserDocument>();
+  const store = createBillingStoreFromCollections(
     {
       jobs: new MemoryCollection<JobDocument>(),
       settings: new MemoryCollection<SettingsDocument>(),
       overlays: new MemoryCollection<OverlayDocument>(),
       runs: new MemoryCollection<RunDocument>(),
+      users,
     },
     async () => {},
   );
+  return { store, users };
 }
 
 describe('mongo store', () => {
   it('upsertJob and listJobs round-trip', async () => {
-    const store = createStore();
+    const { store } = createStore();
     const job: JobDocument = {
       id: 'home-eb',
+      userId: 'user-1',
       provider: 'tnpdcl',
       enabled: true,
       schedule: '0 9 * * *',
@@ -118,8 +123,96 @@ describe('mongo store', () => {
     assert.deepEqual(jobs, [job]);
   });
 
+  it('listJobs filters by userId when provided', async () => {
+    const { store } = createStore();
+    const jobForUser1: JobDocument = {
+      id: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: '0 9 * * *',
+      credentialsEnv: {},
+      notify: { title: 'TNPDCL Bill' },
+    };
+    const jobForUser2: JobDocument = {
+      ...jobForUser1,
+      id: 'other-eb',
+      userId: 'user-2',
+    };
+
+    await store.upsertJob(jobForUser1);
+    await store.upsertJob(jobForUser2);
+
+    const allJobs = await store.listJobs();
+    assert.deepEqual(
+      allJobs.map((job) => job.id).sort(),
+      ['home-eb', 'other-eb'],
+    );
+
+    const user1Jobs = await store.listJobs({ userId: 'user-1' });
+    assert.deepEqual(user1Jobs, [jobForUser1]);
+  });
+
+  it('listRuns filters by userId when provided', async () => {
+    const { store } = createStore();
+    const runForUser1: RunDocument = {
+      id: 'run-1',
+      jobId: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      status: 'success',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      finishedAt: '2026-08-09T00:01:00.000Z',
+      durationMs: 60_000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    };
+    const runForUser2: RunDocument = {
+      ...runForUser1,
+      id: 'run-2',
+      userId: 'user-2',
+    };
+
+    await store.createRun(runForUser1);
+    await store.createRun(runForUser2);
+
+    const allRuns = await store.listRuns();
+    assert.deepEqual(
+      allRuns.map((run) => run.id).sort(),
+      ['run-1', 'run-2'],
+    );
+
+    const user1Runs = await store.listRuns({ userId: 'user-1' });
+    assert.deepEqual(user1Runs, [runForUser1]);
+  });
+
+  it('findUserByEmail matches lowercase email and getUser looks up by id', async () => {
+    const { store, users } = createStore();
+    const user: UserDocument = {
+      id: 'user-1',
+      email: 'person@example.com',
+      passwordHash: 'hashed',
+      createdAt: '2026-08-09T00:00:00.000Z',
+    };
+    await users.insertOne(user);
+
+    const foundByEmail = await store.findUserByEmail('PERSON@example.com');
+    assert.deepEqual(foundByEmail, user);
+
+    const foundById = await store.getUser('user-1');
+    assert.deepEqual(foundById, user);
+
+    const missing = await store.findUserByEmail('missing@example.com');
+    assert.equal(missing, null);
+  });
+
   it('recordOverlaySuccess activates after three successes', async () => {
-    const store = createStore();
+    const { store } = createStore();
     const patch: SelectorOverlayPatch = { username: '#userName' };
     const first = await store.recordOverlaySuccess({
       provider: 'tnpdcl',
