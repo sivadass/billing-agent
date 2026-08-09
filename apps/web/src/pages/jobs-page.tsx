@@ -1,10 +1,12 @@
-import { Alert, Button, PageHeader, Spinner } from 'cleanplate';
+import { Alert, Button, PageHeader } from 'cleanplate';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { JobsTable } from '../components/jobs-table';
+import { Loader } from '../components/loader';
 import { ApiClientError } from '../lib/api-client';
 import { disableJob, listJobs, runJobNow, updateJob } from '../lib/jobs-api';
 import type { JobDocument } from '../lib/types';
+import styles from './jobs-page.module.scss';
 
 export function JobsPage() {
   const navigate = useNavigate();
@@ -85,7 +87,11 @@ export function JobsPage() {
       {actionError ? (
         <Alert variant="error" margin="t-3" message={actionError} />
       ) : null}
-      {isLoading ? <Spinner margin="t-3" /> : null}
+      {isLoading ? (
+        <div className={styles['loading-state']}>
+          <Loader size={56} />
+        </div>
+      ) : null}
       {!isLoading && !error ? (
         <JobsTable
           jobs={jobs}

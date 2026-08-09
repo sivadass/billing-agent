@@ -5,10 +5,10 @@ import {
   Container,
   Icon,
   PageHeader,
-  Spinner,
   Typography,
 } from 'cleanplate';
 import { useCallback, useEffect, useState } from 'react';
+import { Loader } from '../components/loader';
 import { ApiClientError, apiFetch } from '../lib/api-client';
 import { getAccessToken, getApiBaseUrl } from '../lib/auth-token';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
@@ -21,7 +21,7 @@ type ProbeState =
   | { status: 'error'; message: string };
 
 function probeBadge(state: ProbeState) {
-  if (state.status === 'loading') return <Spinner size="small" />;
+  if (state.status === 'loading') return <Loader size={16} />;
   if (state.status === 'ok') return <Badge label="OK" variant="success" />;
   if (state.status === 'error') return <Badge label="Fail" variant="error" />;
   return <Badge label="Idle" variant="default" />;
@@ -137,7 +137,7 @@ export function StatusPage() {
             <Badge label={overall.label} variant={overall.variant} />
           </div>
         </Container>
-        {isChecking ? <Spinner size="small" /> : null}
+        {isChecking ? <Loader size={20} /> : null}
       </Container>
 
       <Container className={styles['metrics-row']} display="flex" gap="3" margin="t-3" padding="0">
