@@ -164,11 +164,12 @@ node apps/worker/dist/cli.js seed-jobs --from jobs.coolify.json
 
 ## Web UI (`apps/web`)
 
-Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override). The web shell provides Jobs, Runs, and Status hubs with router URLs:
+Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override under **Settings**). The web shell provides Jobs, Runs, Status, and Settings hubs with router URLs:
 
 - `/jobs`, `/jobs/new`, `/jobs/:jobId`
 - `/runs`, `/runs/:runId` (polls run detail while running)
 - `/status`
+- `/settings` (API token session override)
 
 ```bash
 npm run dev:web

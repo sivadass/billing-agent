@@ -4,7 +4,7 @@ React (Vite) UI for the billing-agent HTTP API. Uses Cleanplate + SCSS modules.
 
 ## App hubs and routes
 
-The app is organized into three hubs under a router shell:
+The app is organized into hubs under a router shell:
 
 - `/jobs` - list jobs, run now, edit, soft-disable/enable
 - `/jobs/new` - create job
@@ -12,6 +12,7 @@ The app is organized into three hubs under a router shell:
 - `/runs` - list/filter runs
 - `/runs/:runId` - run detail with polling while status is `running`
 - `/status` - API health/auth probes
+- `/settings` - API token session override (TokenGate)
 
 Notes:
 
@@ -45,7 +46,7 @@ cp apps/web/.env.example apps/web/.env
 npm run dev:web
 ```
 
-Open the printed local URL. Without `VITE_API_TOKEN`, use the TokenGate form (session override).
+Open the printed local URL. Without `VITE_API_TOKEN`, open **Settings** and use the token form (session override).
 
 ## Vercel
 

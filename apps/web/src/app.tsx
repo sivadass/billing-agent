@@ -8,11 +8,11 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { TokenGate } from './components/token-gate';
 import { JobFormPage } from './pages/job-form-page';
 import { JobsPage } from './pages/jobs-page';
 import { RunDetailPage } from './pages/run-detail-page';
 import { RunsPage } from './pages/runs-page';
+import { SettingsPage } from './pages/settings-page';
 import { StatusPage } from './pages/status-page';
 import styles from './app.module.scss';
 
@@ -20,6 +20,7 @@ const MENU: Array<{ label: string; value: string; icon: any }> = [
   { label: 'Jobs', value: '/jobs', icon: 'work' },
   { label: 'Runs', value: '/runs', icon: 'history' },
   { label: 'Status', value: '/status', icon: 'monitor_heart' },
+  { label: 'Settings', value: '/settings', icon: 'settings' },
 ];
 
 export function App() {
@@ -39,6 +40,8 @@ export function AppLayout() {
   const onMenuClick = (item: { value: string }) => {
     navigate(item.value);
   };
+
+  const onTokenChange = () => setTokenEpoch((value) => value + 1);
 
   return (
     <AppShell
@@ -62,8 +65,7 @@ export function AppLayout() {
       }}
     >
       <Container className={styles['app-root']} padding="4">
-        <TokenGate key={tokenEpoch} onTokenChange={() => setTokenEpoch((value) => value + 1)} />
-        <Routes>
+        <Routes key={tokenEpoch}>
           <Route path="/" element={<Navigate to="/jobs" replace />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/jobs/new" element={<JobFormPage />} />
@@ -71,6 +73,7 @@ export function AppLayout() {
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route path="/status" element={<StatusPage />} />
+          <Route path="/settings" element={<SettingsPage onTokenChange={onTokenChange} />} />
         </Routes>
       </Container>
     </AppShell>
