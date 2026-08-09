@@ -709,7 +709,7 @@ export type RunDocument = {
 };
 ```
 
-- [ ] **Step 1: Write failing client tests** (mock `fetch` / `apiFetch`)
+- [x] **Step 1: Write failing client tests** (mock `fetch` / `apiFetch`)
 
 Example for `runJobNow`:
 
@@ -726,13 +726,13 @@ it('posts to /jobs/:id/run and returns id on 202', async () => {
 });
 ```
 
-- [ ] **Step 2: Run tests — expect FAIL**
+- [x] **Step 2: Run tests — expect FAIL**
 
-- [ ] **Step 3: Implement helpers** using `apiFetch` + JSON parse + status checks
+- [x] **Step 3: Implement helpers** using `apiFetch` + JSON parse + status checks
 
-- [ ] **Step 4: Run tests — expect PASS**
+- [x] **Step 4: Run tests — expect PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/lib/types.ts apps/web/src/lib/jobs-api.ts apps/web/src/lib/runs-api.ts apps/web/src/lib/jobs-api.test.ts
