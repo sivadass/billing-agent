@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { verifyAccessToken, type AccessTokenClaims } from './jwt.js';
 
 function unauthorized(res: ServerResponse): void {
   res.statusCode = 401;
@@ -6,22 +7,23 @@ function unauthorized(res: ServerResponse): void {
   res.end(JSON.stringify({ error: 'Unauthorized' }));
 }
 
-export function requireBearerAuth(
+export async function requireJwtAuth(
   req: IncomingMessage,
   res: ServerResponse,
-  token: string,
-): boolean {
+  jwtSecret: string,
+): Promise<AccessTokenClaims | null> {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     unauthorized(res);
-    return false;
+    return null;
   }
 
-  const provided = header.slice('Bearer '.length);
-  if (provided !== token) {
+  const token = header.slice('Bearer '.length);
+  const claims = await verifyAccessToken(token, jwtSecret);
+  if (!claims) {
     unauthorized(res);
-    return false;
+    return null;
   }
 
-  return true;
+  return claims;
 }
