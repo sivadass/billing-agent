@@ -39,7 +39,7 @@ export function LoginPage() {
 
   return (
     <div className={styles['login-page']}>
-      <Container className={styles.card} padding="5" showBorder>
+      <Container className={styles.card} padding="6" showBorder>
         <img
           className={styles.logo}
           src="/billing-agent-logo.svg"
@@ -70,8 +70,8 @@ export function LoginPage() {
             margin="t-3"
           />
           {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
-          <Button type="submit" variant="solid" isFluid margin="t-4" isLoading={isSubmitting}>
-            Sign in
+          <Button type="submit" variant="solid" isFluid margin={["t-4", "b-4"]} isLoading={isSubmitting}>
+            LOGIN
           </Button>
         </form>
       </Container>
