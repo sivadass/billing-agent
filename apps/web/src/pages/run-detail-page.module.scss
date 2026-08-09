@@ -1,0 +1,77 @@
+.run-detail {
+  display: flex;
+  flex-direction: column;
+  max-width: 56rem;
+}
+
+.status-banner {
+  background-color: var(--white);
+}
+
+.metrics-row {
+  flex-wrap: wrap;
+}
+
+.metric {
+  flex: 1 1 10rem;
+  min-width: 10rem;
+  background-color: var(--white);
+}
+
+.section {
+  background-color: var(--white);
+}
+
+.fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-4);
+}
+
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.detail-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.detail-value {
+  color: var(--text-default);
+}
+
+.detail-value-mono {
+  color: var(--text-default);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  word-break: break-all;
+}
+
+.bill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-4);
+}
+
+.bill-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.bill-value {
+  color: var(--text-default);
+  word-break: break-word;
+}
+
+.polling-hint {
+  color: var(--text-muted);
+}
+
+.muted {
+  color: var(--text-muted);
+}

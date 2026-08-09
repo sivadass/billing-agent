@@ -70,7 +70,7 @@ describe('RunDetailPage polling', () => {
     await flushAsync();
     await flushAsync();
     expect(runsApi.getRun).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Status: running/i)).toBeInTheDocument();
+    expect(screen.getByText('running')).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(2200);
@@ -79,7 +79,7 @@ describe('RunDetailPage polling', () => {
 
     await flushAsync();
     expect(runsApi.getRun).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/Status: success/i)).toBeInTheDocument();
+    expect(screen.getByText('success')).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(5000);
