@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AppShell, Container, Typography } from 'cleanplate';
+import { AppShell, Container } from 'cleanplate';
 import {
   BrowserRouter,
   Navigate,
@@ -53,15 +53,11 @@ export function AppLayout() {
         onMenuClick,
       }}
       header={{
+        logoUrl: '/billing-agent-logo.svg',
         menuItems: MENU,
         activeMenuItem: activeMenu,
         onMenuItemClick: onMenuClick,
         showCenterMenu: false,
-        headerLeft: (
-          <Typography variant="h3" margin="0">
-            Billing Agent
-          </Typography>
-        ),
       }}
     >
       <Container className={styles['app-root']} padding="4">
