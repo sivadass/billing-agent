@@ -6,7 +6,7 @@ import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
 import { ConfigError, LoginError } from '../src/errors.ts';
-import type { BillingStore } from '../src/store/types.ts';
+import type { BillingStore, RunDocument } from '../src/store/types.ts';
 import { runJob, runJobs } from '../src/job-runner.ts';
 
 const job: JobConfig = {
@@ -44,6 +44,42 @@ const billResult: BillResult = {
 };
 
 describe('runJob', () => {
+  it('invokes onRunCreated with run id after createRun', async () => {
+    const created: string[] = [];
+    const runs: RunDocument[] = [];
+    const store = {
+      async createRun(run: RunDocument) {
+        runs.push(run);
+      },
+      async finishRun() {},
+      async listActiveOverlays() {
+        return [];
+      },
+    } as unknown as BillingStore;
+
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    await runJob(app, job, {
+      env: testEnv,
+      store,
+      getAdapter: () => adapter,
+      withBrowser: async (_browser, fn) => fn({} as Page),
+      sendNtfy: async () => {},
+      onRunCreated: (runId) => created.push(runId),
+      proposeOverlayPatch: async () => {
+        throw new ConfigError('unused');
+      },
+    });
+
+    assert.equal(created.length, 1);
+    assert.equal(created[0], runs[0]?.id);
+  });
+
   it('attempts one recovery and records overlay success after retry succeeds', async () => {
     const calls: string[] = [];
     const runUpdates: Array<Partial<Record<string, unknown>>> = [];

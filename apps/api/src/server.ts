@@ -8,6 +8,7 @@ export type StartServerInput = {
   token: string;
   store: BillingStore;
   corsOrigins?: string[];
+  onRunJob?: (jobId: string) => Promise<string>;
 };
 
 export type ApiServerHandle = {
@@ -22,7 +23,11 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
     const { handled } = applyCors(req, res, corsOrigins);
     if (handled) return;
 
-    void handleRoute(req, res, { token: input.token, store: input.store }).catch(
+    void handleRoute(req, res, {
+      token: input.token,
+      store: input.store,
+      onRunJob: input.onRunJob,
+    }).catch(
       (error: unknown) => {
         res.statusCode = 500;
         res.setHeader('content-type', 'application/json');

@@ -2,6 +2,26 @@
 
 React (Vite) UI for the billing-agent HTTP API. Uses Cleanplate + SCSS modules.
 
+## App hubs and routes
+
+The app is organized into three hubs under a router shell:
+
+- `/jobs` - list jobs, run now, edit, soft-disable/enable
+- `/jobs/new` - create job
+- `/jobs/:jobId` - edit job
+- `/runs` - list/filter runs
+- `/runs/:runId` - run detail with polling while status is `running`
+- `/status` - API health/auth probes
+
+Notes:
+
+- Schedules are shown in humanized form in tables, but edited as raw cron in forms.
+- Empty schedule means manual-only (`null` in API payloads).
+- Job disable is soft-disable only (`DELETE /jobs/:id` sets `enabled: false`).
+- Credentials are env **names** only (`credentialsEnv`), never secret values.
+- `Run` calls `POST /jobs/:id/run` and navigates to the created run detail.
+- The run trigger requires the worker daemon API (`billing-agent daemon`) with `onRunJob` wiring.
+
 ## Local development
 
 1. Run the worker daemon (API on `HTTP_PORT`, default `8080`) with CORS:

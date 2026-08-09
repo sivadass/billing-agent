@@ -53,8 +53,16 @@ class MemoryStore implements BillingStore {
     this.runs.set(id, { ...current, ...update });
   }
 
-  async listRuns(): Promise<RunDocument[]> {
-    return [...this.runs.values()];
+  async listRuns(options?: { jobId?: string; limit?: number }): Promise<RunDocument[]> {
+    let runs = [...this.runs.values()];
+    if (options?.jobId) {
+      runs = runs.filter((run) => run.jobId === options.jobId);
+    }
+    runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    if (options?.limit && options.limit > 0) {
+      return runs.slice(0, options.limit);
+    }
+    return runs;
   }
 
   async getRun(id: string): Promise<RunDocument | null> {
@@ -193,5 +201,121 @@ describe('api CORS', () => {
     });
     assert.equal(response.status, 401);
     assert.equal(response.headers.get('access-control-allow-origin'), null);
+  });
+});
+
+describe('POST /jobs/:id/run', () => {
+  const enabledJob: JobDocument = {
+    id: 'home-eb',
+    provider: 'dummy',
+    enabled: true,
+    schedule: null,
+    credentialsEnv: {},
+    notify: { title: 'Bill' },
+  };
+
+  it('returns 503 when onRunJob is not configured', async () => {
+    const store = new MemoryStore();
+    await store.upsertJob(enabledJob);
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store,
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(response.status, 503);
+  });
+
+  it('returns 202 with run id from onRunJob', async () => {
+    const store = new MemoryStore();
+    await store.upsertJob(enabledJob);
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store,
+      onRunJob: async () => 'run-123',
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(response.status, 202);
+    const body = (await response.json()) as { id: string };
+    assert.equal(body.id, 'run-123');
+  });
+
+  it('returns 404 when job is missing', async () => {
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store: new MemoryStore(),
+      onRunJob: async () => 'run-x',
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/missing/run`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(response.status, 404);
+  });
+
+  it('returns 409 when job is disabled', async () => {
+    const store = new MemoryStore();
+    await store.upsertJob({ ...enabledJob, enabled: false });
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store,
+      onRunJob: async () => 'run-x',
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(response.status, 409);
+  });
+
+  it('returns 409 when a run is already running', async () => {
+    const store = new MemoryStore();
+    await store.upsertJob(enabledJob);
+    await store.createRun({
+      id: 'existing',
+      jobId: 'home-eb',
+      provider: 'dummy',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store,
+      onRunJob: async () => 'run-x',
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(response.status, 409);
   });
 });

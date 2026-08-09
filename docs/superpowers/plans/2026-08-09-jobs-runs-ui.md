@@ -60,7 +60,7 @@
 - Consumes: existing `runJob(app, job, deps)`
 - Produces: `RunnerDeps.onRunCreated?: (runId: string) => void` — called once after run id is assigned and `createRun` has completed when `store` is set (still called when no store, immediately after id generation)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add inside `describe('runJob', ...)` in `packages/core/tests/job-runner.test.ts`:
 
@@ -104,13 +104,13 @@ it('invokes onRunCreated with run id after createRun', async () => {
 
 Import `RunDocument` from `../src/store/types.ts` if not already imported.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --import tsx --test packages/core/tests/job-runner.test.ts`
 
 Expected: FAIL — `onRunCreated` is not a known dep / never called (or TypeScript error if strictly typed before implementation).
 
-- [ ] **Step 3: Implement `onRunCreated`**
+- [x] **Step 3: Implement `onRunCreated`**
 
 In `packages/core/src/job-runner.ts`, extend `RunnerDeps`:
 
@@ -143,13 +143,13 @@ Immediately after the `createRun` block (and still after `runId` is created when
   runnerDeps.onRunCreated?.(runId);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --import tsx --test packages/core/tests/job-runner.test.ts`
 
 Expected: PASS (including the new test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/core/src/job-runner.ts packages/core/tests/job-runner.test.ts
@@ -172,7 +172,7 @@ git commit -m "feat(core): notify onRunCreated after run record is created"
   - `RouteContext.onRunJob?: (jobId: string) => Promise<string>`
   - `POST /jobs/:jobId/run` → 202 `{ id: string }` | 404 | 409 | 503
 
-- [ ] **Step 1: Fix `MemoryStore.listRuns` and write failing run-trigger tests**
+- [x] **Step 1: Fix `MemoryStore.listRuns` and write failing run-trigger tests**
 
 Replace `MemoryStore.listRuns` in `apps/api/tests/api.test.ts` with:
 
@@ -310,13 +310,13 @@ describe('POST /jobs/:id/run', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `node --import tsx --test apps/api/tests/api.test.ts`
 
 Expected: FAIL on new cases (404 from unknown route or missing `onRunJob` typing).
 
-- [ ] **Step 3: Implement server + route**
+- [x] **Step 3: Implement server + route**
 
 `apps/api/src/server.ts`:
 
@@ -370,13 +370,13 @@ void handleRoute(req, res, {
 
 Ensure path parsing does not leave a trailing slash; job ids must not contain `/`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `node --import tsx --test apps/api/tests/api.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/server.ts apps/api/src/routes.ts apps/api/tests/api.test.ts
@@ -394,7 +394,7 @@ git commit -m "feat(api): add POST /jobs/:id/run trigger endpoint"
 - Consumes: `runJob`, `loadConfigFromStore`, `onRunCreated`, `startServer({ onRunJob })`
 - Produces: Daemon `onRunJob(jobId)` that returns `runId` after create, while scrape continues
 
-- [ ] **Step 1: Implement daemon `onRunJob`**
+- [x] **Step 1: Implement daemon `onRunJob`**
 
 In the `daemon` action, import `runJob` from `@billing-agent/core` (in addition to existing imports). Replace `startServer` call with:
 
@@ -436,13 +436,13 @@ In the `daemon` action, import `runJob` from `@billing-agent/core` (in addition 
 
 Keep `startDaemon(app, { store })` as today (scheduler uses initial `app`; generation bumps already reload via store — do not change scheduler in this task unless required for compile).
 
-- [ ] **Step 2: Typecheck worker**
+- [x] **Step 2: Typecheck worker**
 
 Run: `npm run build -w @billing-agent/worker` (or the workspace’s equivalent `tsc` script)
 
 Expected: PASS / emit succeeds.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add apps/worker/src/cli.ts
@@ -468,13 +468,13 @@ git commit -m "feat(worker): wire onRunJob for manual API runs"
 - Consumes: Cleanplate `AppShell` / `Header`, `TokenGate`
 - Produces: Routes `/` → `/jobs`, `/jobs`, `/runs`, `/status` (stubs OK except status)
 
-- [ ] **Step 1: Install dependency**
+- [x] **Step 1: Install dependency**
 
 ```bash
 npm install react-router-dom -w @billing-agent/web
 ```
 
-- [ ] **Step 2: Write failing router smoke test**
+- [x] **Step 2: Write failing router smoke test**
 
 `apps/web/src/app-shell.test.tsx`:
 
@@ -522,13 +522,13 @@ export function AppLayout() { /* shell + Routes */ }
 
 and test `AppLayout` with `MemoryRouter`.
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `npm run test -w @billing-agent/web -- src/app-shell.test.tsx`
 
 Expected: FAIL (no Jobs heading / no router).
 
-- [ ] **Step 4: Implement shell**
+- [x] **Step 4: Implement shell**
 
 Move status page files into `pages/`. Stub jobs/runs pages with `PageHeader` / `Typography` title “Jobs” / “Runs”.
 
@@ -558,13 +558,13 @@ Use `useNavigate` / `useLocation` for active item + navigation. Include `TokenGa
 
 Minimal stubs for form/detail pages are fine (`Typography` placeholder) until later tasks fill them in — create empty stub files in this task so routes compile.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `npm run test -w @billing-agent/web`
 
 Expected: PASS (including existing token/api-client tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/package.json package-lock.json apps/web/src
@@ -583,7 +583,7 @@ git commit -m "feat(web): add AppShell routes for Jobs, Runs, and Status"
 - Consumes: cron string | null
 - Produces: `humanizeCron(schedule: string | null | undefined): string`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -607,13 +607,13 @@ describe('humanizeCron', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm run test -w @billing-agent/web -- src/lib/cron-humanize.test.ts`
 
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 function formatClock(hour: number, minute: number): string {
@@ -643,13 +643,13 @@ export function humanizeCron(schedule: string | null | undefined): string {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm run test -w @billing-agent/web -- src/lib/cron-humanize.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/lib/cron-humanize.ts apps/web/src/lib/cron-humanize.test.ts
@@ -709,7 +709,7 @@ export type RunDocument = {
 };
 ```
 
-- [ ] **Step 1: Write failing client tests** (mock `fetch` / `apiFetch`)
+- [x] **Step 1: Write failing client tests** (mock `fetch` / `apiFetch`)
 
 Example for `runJobNow`:
 
@@ -726,13 +726,13 @@ it('posts to /jobs/:id/run and returns id on 202', async () => {
 });
 ```
 
-- [ ] **Step 2: Run tests — expect FAIL**
+- [x] **Step 2: Run tests — expect FAIL**
 
-- [ ] **Step 3: Implement helpers** using `apiFetch` + JSON parse + status checks
+- [x] **Step 3: Implement helpers** using `apiFetch` + JSON parse + status checks
 
-- [ ] **Step 4: Run tests — expect PASS**
+- [x] **Step 4: Run tests — expect PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/lib/types.ts apps/web/src/lib/jobs-api.ts apps/web/src/lib/runs-api.ts apps/web/src/lib/jobs-api.test.ts
@@ -753,11 +753,11 @@ git commit -m "feat(web): add jobs and runs API client helpers"
 - Consumes: `listJobs`, `runJobNow`, `disableJob`, `updateJob`, `humanizeCron`
 - Produces: Jobs hub with Run / Edit / Disable|Enable
 
-- [ ] **Step 1: Write failing page test**
+- [x] **Step 1: Write failing page test**
 
 Mock `jobs-api` to return one enabled job. Render `JobsPage` inside `MemoryRouter`. Assert schedule humanized text and that clicking Run calls `runJobNow` and navigates (use `createMemoryRouter` + `RouterProvider` or mock `useNavigate`).
 
-- [ ] **Step 2: Implement table + page**
+- [x] **Step 2: Implement table + page**
 
 Use Cleanplate `PageHeader` (primary CTA → `/jobs/new`), `Table` columns: id, provider, enabled (`Badge`), schedule (`humanizeCron`), notify title, actions (`Button`s).
 
@@ -786,9 +786,9 @@ Ensure desktop `customRender` cells and mobile `action` stay behaviorally equiva
 - Run now: disabled when `!job.enabled`; on 202 `navigate(\`/runs/${id}\`)`; on error show `Alert`
 - Edit: `navigate(\`/jobs/${id}\`)`
 
-- [ ] **Step 3: Tests PASS**
+- [x] **Step 3: Tests PASS**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/web/src/components/jobs-table.tsx apps/web/src/components/jobs-table.module.scss apps/web/src/pages/jobs-page.tsx apps/web/src/pages/jobs-page.test.tsx
@@ -808,9 +808,9 @@ git commit -m "feat(web): implement Jobs hub table and actions"
 - Consumes: `getJob`, `createJob`, `updateJob`
 - Produces: Form for `/jobs/new` and `/jobs/:jobId`
 
-- [ ] **Step 1: Failing test** — create submits `POST` payload with `credentialsEnv` and empty schedule → `null`
+- [x] **Step 1: Failing test** — create submits `POST` payload with `credentialsEnv` and empty schedule → `null`
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Fields via `FormControls`:
 
@@ -823,7 +823,7 @@ Fields via `FormControls`:
 
 On save success → `navigate('/jobs')`. Show inline `error` props on invalid required fields.
 
-- [ ] **Step 3: Tests PASS + commit**
+- [x] **Step 3: Tests PASS + commit**
 
 ```bash
 git add apps/web/src/components/credentials-env-editor.tsx apps/web/src/pages/job-form-page.tsx apps/web/src/pages/job-form-page.test.tsx
@@ -845,7 +845,7 @@ git commit -m "feat(web): add job create and edit form"
 - Consumes: `listRuns`, `getRun`, `listJobs` (for filter options)
 - Produces: `/runs` table + `/runs/:runId` polling detail
 
-- [ ] **Step 1: Failing test for polling stop**
+- [x] **Step 1: Failing test for polling stop**
 
 ```tsx
 it('stops polling once status is success', async () => {
@@ -860,7 +860,7 @@ it('stops polling once status is success', async () => {
 
 Use `vi.useFakeTimers()` carefully with Testing Library `waitFor`.
 
-- [ ] **Step 2: Implement Runs page**
+- [x] **Step 2: Implement Runs page**
 
 Filters: job `FormControls.Select` (all + job ids), status select. Fetch `listRuns({ limit: 100, jobId? })`; client-filter status. `Table` `onRowClick` → `/runs/:id`.
 
@@ -877,11 +877,11 @@ mobileColumns={{
 
 Precompute `statusLabel` / `timingLabel` on row objects. Keep `onRowClick` for navigation on both desktop rows and mobile cards.
 
-- [ ] **Step 3: Implement Run detail**
+- [x] **Step 3: Implement Run detail**
 
 Show fields from spec. `useEffect` interval 2000ms while `status === 'running'`; clear on unmount / terminal. Links back to `/runs` and `/jobs/:jobId`.
 
-- [ ] **Step 4: Tests PASS + commit**
+- [x] **Step 4: Tests PASS + commit**
 
 ```bash
 git add apps/web/src/components/runs-table.tsx apps/web/src/pages/runs-page.tsx apps/web/src/pages/run-detail-page.tsx apps/web/src/pages/run-detail-page.test.tsx apps/web/src/pages/runs-page.test.tsx
@@ -897,11 +897,11 @@ git commit -m "feat(web): add Runs hub and live run detail polling"
 - Modify: `README.md` (root) if it still describes status-only UI
 - Modify: `postman/billing-agent-api.postman-collection.json` — add `POST /jobs/:id/run` request
 
-- [ ] **Step 1: Update README** — document hubs, routes, Run now, humanized schedule, soft-disable, required daemon for triggers
+- [x] **Step 1: Update README** — document hubs, routes, Run now, humanized schedule, soft-disable, required daemon for triggers
 
-- [ ] **Step 2: Add Postman request** for `POST {{baseUrl}}/jobs/{{jobId}}/run` with Bearer auth
+- [x] **Step 2: Add Postman request** for `POST {{baseUrl}}/jobs/{{jobId}}/run` with Bearer auth
 
-- [ ] **Step 3: Full test suite**
+- [x] **Step 3: Full test suite**
 
 ```bash
 npm test
@@ -912,7 +912,7 @@ npm run build -w @billing-agent/core
 
 Expected: all PASS / build OK.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/web/README.md README.md postman/billing-agent-api.postman-collection.json
