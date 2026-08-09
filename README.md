@@ -12,7 +12,7 @@ Billing automation with a recovery-only learning path:
 ```text
 apps/
   api/       # @billing-agent/api (HTTP server)
-  web/       # stub for future UI
+  web/       # @billing-agent/web (Vite + React API shell)
   worker/    # @billing-agent/worker (CLI + scheduler daemon)
 packages/
   core/      # @billing-agent/core (adapters, config, runner, recovery, store)
@@ -39,6 +39,7 @@ Key runtime variables:
 | `MONGODB_URI` | Mongo connection string (required) |
 | `API_TOKEN` | Bearer token for all API routes except `/health` (required for daemon) |
 | `HTTP_PORT` | API listen port (default `8080`) |
+| `CORS_ORIGINS` | Comma-separated browser origins allowed to call API (optional) |
 | `NTFY_TOPIC` | ntfy topic (secret) |
 | `MISTRAL_API_KEY` | Mistral API key (used for captcha + recovery) |
 | `TNPDCL_USERNAME` | TNPDCL login |
@@ -149,7 +150,7 @@ CI/test expectations: mocks only; no live Atlas and no live TNPDCL logins.
 
 - Build with `Dockerfile`.
 - Runtime command is already `worker daemon` (scheduler + embedded API in one process).
-- Set runtime env vars: `MONGODB_URI`, `API_TOKEN`, `HTTP_PORT`, `NTFY_TOPIC`, `MISTRAL_API_KEY`, provider credentials.
+- Set runtime env vars: `MONGODB_URI`, `API_TOKEN`, `HTTP_PORT`, `CORS_ORIGINS`, `NTFY_TOPIC`, `MISTRAL_API_KEY`, provider credentials.
 - Expose `HTTP_PORT`.
 - Health check: `GET /health`.
 - Recommended memory: at least 1 GB (Chromium spikes).
@@ -160,6 +161,18 @@ Optional post-deploy seed:
 node apps/worker/dist/cli.js seed-jobs --from jobs.coolify.json
 ```
 
-## apps/web
+## Web UI (`apps/web`)
 
-`apps/web` is intentionally a stub; the future UI should consume this API via bearer auth.
+Vite + React + Cleanplate SPA hosted on Netlify. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override).
+
+```bash
+npm run dev:web
+```
+
+On the API host, allow browser origins:
+
+```bash
+CORS_ORIGINS=http://localhost:5173,https://your-app.netlify.app
+```
+
+See `apps/web/README.md` for Netlify settings.

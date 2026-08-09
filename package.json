@@ -3,9 +3,10 @@
   "private": true,
   "workspaces": ["packages/*", "apps/*"],
   "scripts": {
-    "build": "npm run build -w @billing-agent/core && npm run build -w @billing-agent/api && npm run build -w @billing-agent/worker",
-    "test": "npm run test -w @billing-agent/core && npm run test -w @billing-agent/api && npm run test -w @billing-agent/worker",
+    "build": "npm run build -w @billing-agent/core && npm run build -w @billing-agent/api && npm run build -w @billing-agent/worker && npm run build -w @billing-agent/web",
+    "test": "npm run test -w @billing-agent/core && npm run test -w @billing-agent/api && npm run test -w @billing-agent/worker && npm run test -w @billing-agent/web",
     "dev": "npm run dev -w @billing-agent/worker",
+    "dev:web": "npm run dev -w @billing-agent/web",
     "start": "npm run start -w @billing-agent/worker",
     "postinstall": "playwright install chromium"
   },

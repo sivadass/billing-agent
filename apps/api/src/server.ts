@@ -1,11 +1,13 @@
 import { createServer } from 'node:http';
 import type { BillingStore } from '@billing-agent/core';
+import { applyCors } from './cors.js';
 import { handleRoute } from './routes.js';
 
 export type StartServerInput = {
   port: number;
   token: string;
   store: BillingStore;
+  corsOrigins?: string[];
 };
 
 export type ApiServerHandle = {
@@ -14,7 +16,12 @@ export type ApiServerHandle = {
 };
 
 export async function startServer(input: StartServerInput): Promise<ApiServerHandle> {
+  const corsOrigins = input.corsOrigins ?? [];
+
   const server = createServer((req, res) => {
+    const { handled } = applyCors(req, res, corsOrigins);
+    if (handled) return;
+
     void handleRoute(req, res, { token: input.token, store: input.store }).catch(
       (error: unknown) => {
         res.statusCode = 500;

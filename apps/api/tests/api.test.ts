@@ -119,3 +119,79 @@ describe('api server', () => {
     assert.equal(jobs[0]?.id, 'smoke-test');
   });
 });
+
+describe('api CORS', () => {
+  it('echoes Access-Control-Allow-Origin for an allowlisted Origin', async () => {
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store: new MemoryStore(),
+      corsOrigins: ['http://localhost:5173'],
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/health`, {
+      headers: { Origin: 'http://localhost:5173' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+    assert.equal(
+      response.headers.get('access-control-allow-headers'),
+      'Authorization, Content-Type',
+    );
+  });
+
+  it('does not set CORS headers for a non-allowlisted Origin', async () => {
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store: new MemoryStore(),
+      corsOrigins: ['http://localhost:5173'],
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/health`, {
+      headers: { Origin: 'https://evil.example' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+  });
+
+  it('answers OPTIONS preflight with 204 before auth when CORS is configured', async () => {
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store: new MemoryStore(),
+      corsOrigins: ['https://app.netlify.app'],
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://app.netlify.app',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization',
+      },
+    });
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.netlify.app');
+    assert.match(response.headers.get('access-control-allow-methods') ?? '', /GET/);
+  });
+
+  it('does not short-circuit OPTIONS when corsOrigins is empty', async () => {
+    const handle = await startServer({
+      port: 0,
+      token: 'secret-token',
+      store: new MemoryStore(),
+    });
+    handles.push(handle);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:5173' },
+    });
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+  });
+});
