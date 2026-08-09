@@ -39,6 +39,7 @@ export type RunnerDeps = {
   getAdapter: (provider: string) => BillingAdapter;
   env: NodeJS.ProcessEnv;
   store?: BillingStore;
+  onRunCreated?: (runId: string) => void;
   proposeOverlayPatch: (
     input: Parameters<typeof proposeOverlayPatchWithDeps>[0],
   ) => Promise<Awaited<ReturnType<typeof proposeOverlayPatchWithDeps>>>;
@@ -224,6 +225,7 @@ export async function runJob(
       billSummary: null,
     });
   }
+  runnerDeps.onRunCreated?.(runId);
 
   try {
     const credentials = resolveJobCredentials(job, runnerDeps.env);

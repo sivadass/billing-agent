@@ -60,7 +60,7 @@
 - Consumes: existing `runJob(app, job, deps)`
 - Produces: `RunnerDeps.onRunCreated?: (runId: string) => void` — called once after run id is assigned and `createRun` has completed when `store` is set (still called when no store, immediately after id generation)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add inside `describe('runJob', ...)` in `packages/core/tests/job-runner.test.ts`:
 
@@ -104,13 +104,13 @@ it('invokes onRunCreated with run id after createRun', async () => {
 
 Import `RunDocument` from `../src/store/types.ts` if not already imported.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --import tsx --test packages/core/tests/job-runner.test.ts`
 
 Expected: FAIL — `onRunCreated` is not a known dep / never called (or TypeScript error if strictly typed before implementation).
 
-- [ ] **Step 3: Implement `onRunCreated`**
+- [x] **Step 3: Implement `onRunCreated`**
 
 In `packages/core/src/job-runner.ts`, extend `RunnerDeps`:
 
@@ -143,13 +143,13 @@ Immediately after the `createRun` block (and still after `runId` is created when
   runnerDeps.onRunCreated?.(runId);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --import tsx --test packages/core/tests/job-runner.test.ts`
 
 Expected: PASS (including the new test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/core/src/job-runner.ts packages/core/tests/job-runner.test.ts
