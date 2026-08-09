@@ -1,0 +1,133 @@
+{
+  "info": {
+    "_postman_id": "b7d5f6e9-9fb7-4d21-87b6-9538fd0b92ec",
+    "name": "billing-agent-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "apiToken",
+      "value": "replace-with-api-token"
+    },
+    {
+      "key": "jobId",
+      "value": "smoke-test"
+    },
+    {
+      "key": "runId",
+      "value": "replace-with-run-id"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "GET",
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "Runs",
+      "item": [
+        {
+          "name": "List Runs",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/runs"
+          }
+        },
+        {
+          "name": "List Runs By Job",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/runs?jobId={{jobId}}&limit=20"
+          }
+        },
+        {
+          "name": "Get Run By Id",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/runs/{{runId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "List Jobs",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs"
+          }
+        },
+        {
+          "name": "Get Job By Id",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs/{{jobId}}"
+          }
+        },
+        {
+          "name": "Create Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"smoke-test\",\n  \"provider\": \"dummy\",\n  \"enabled\": true,\n  \"schedule\": null,\n  \"credentialsEnv\": {},\n  \"notify\": { \"title\": \"Dummy Bill\" }\n}"
+            },
+            "url": "{{baseUrl}}/jobs"
+          }
+        },
+        {
+          "name": "Patch Job",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false,\n  \"notify\": { \"title\": \"Dummy Bill Updated\" }\n}"
+            },
+            "url": "{{baseUrl}}/jobs/{{jobId}}"
+          }
+        },
+        {
+          "name": "Soft Delete Job",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/jobs/{{jobId}}"
+          }
+        }
+      ]
+    }
+  ]
+}

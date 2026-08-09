@@ -1,32 +1,15 @@
 {
   "name": "billing-agent",
-  "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "bin": {
-    "billing-agent": "./dist/cli.js"
-  },
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/cli.js",
-    "dev": "tsx src/cli.ts",
-    "test": "tsx --test tests/**/*.test.ts",
+    "build": "npm run build -w @billing-agent/core && npm run build -w @billing-agent/api && npm run build -w @billing-agent/worker",
+    "test": "npm run test -w @billing-agent/core && npm run test -w @billing-agent/api && npm run test -w @billing-agent/worker",
+    "dev": "npm run dev -w @billing-agent/worker",
+    "start": "npm run start -w @billing-agent/worker",
     "postinstall": "playwright install chromium"
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "@mistralai/mistralai": "^1.10.0",
-    "commander": "^13.1.0",
-    "dotenv": "^16.5.0",
-    "node-cron": "^3.0.3",
-    "playwright": "^1.52.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.15.0",
-    "@types/node-cron": "^3.0.11",
-    "tsx": "^4.19.0",
-    "typescript": "^5.8.0"
   }
 }

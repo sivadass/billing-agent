@@ -1,219 +1,165 @@
 # billing-agent
 
-Personal billing checker: scheduled browser automation for electricity, internet, and similar bills, with [ntfy.sh](https://ntfy.sh) notifications.
+Billing automation with a recovery-only learning path:
 
-Each job launches headless Chromium, runs a provider-specific adapter (login, captcha if needed, scrape), sends a success or failure notification, and exits. Designed for cron or a built-in daemon.
+- deterministic Playwright adapters on the happy path (cheap),
+- one-shot Mistral overlay recovery + one retry on recoverable failures,
+- MongoDB as runtime source of truth (jobs/settings/overlays/runs),
+- token-protected HTTP API embedded in the worker daemon.
 
-## What it does
+## Workspace layout
 
-1. Load `jobs.json` and resolve secrets from environment variables
-2. Launch a short-lived Chromium instance (Playwright)
-3. Run the adapter for the job’s `provider` (`dummy`, `tnpdcl`, or your own)
-4. POST bill details (amount, due date, period, masked account) to ntfy on success
-
-When TNPDCL Bill Payments and Disconnected Services both show "No records found", the job succeeds without sending a success notification.
-
-5. On failure: classify the error, optionally save a screenshot under `tmp/`, notify with high priority
-
-Built-in adapters:
-
-| Provider | Job id (example) | Notes |
-| --- | --- | --- |
-| `dummy` | `smoke-test` | Local HTML fixture; no login or Mistral required |
-| `tnpdcl` | `home-eb` | TNPDCL/TANGEDCO portal; Mistral captcha OCR |
-
-## RAM note
-
-The browser is tuned for modest VPS hosts (≥1 GB RAM): headless Chromium, disabled GPU/extensions, `--disable-dev-shm-usage`, and a reduced V8 heap flag. Each run is **short-lived** (launch → one job → close).
-
-This is **not** a guarantee of ≤256 MB peak RSS while Chromium is running—that figure is aspirational only. Plan for brief spikes during page load; avoid overlapping runs on very small machines.
-
-## Setup
-
-**Requirements:** Node.js 20+, npm
-
-```bash
-git clone <repo-url> billing-agent
-cd billing-agent
-npm install
+```text
+apps/
+  api/       # @billing-agent/api (HTTP server)
+  web/       # stub for future UI
+  worker/    # @billing-agent/worker (CLI + scheduler daemon)
+packages/
+  core/      # @billing-agent/core (adapters, config, runner, recovery, store)
 ```
 
-`npm install` runs `playwright install chromium` via `postinstall`. If you skipped postinstall (e.g. `npm install --ignore-scripts`), install Chromium manually:
+## Requirements
+
+- Node.js 20+
+- npm
+- MongoDB (Atlas or self-hosted)
+
+## Environment
+
+Copy and edit:
 
 ```bash
-npx playwright install chromium
-```
-
-Copy the example config and secrets (neither file is committed):
-
-```bash
-cp jobs.example.json jobs.json
 cp .env.example .env
 ```
 
-Edit `.env`:
+Key runtime variables:
 
-| Variable | Required for | Purpose |
-| --- | --- | --- |
-| `NTFY_TOPIC` | All jobs | ntfy topic (keep secret) |
-| `MISTRAL_API_KEY` | `tnpdcl` | Captcha OCR via Mistral vision |
-| `TNPDCL_USERNAME` | `home-eb` | Portal login |
-| `TNPDCL_PASSWORD` | `home-eb` | Portal login |
+| Variable | Purpose |
+| --- | --- |
+| `MONGODB_URI` | Mongo connection string (required) |
+| `API_TOKEN` | Bearer token for all API routes except `/health` (required for daemon) |
+| `HTTP_PORT` | API listen port (default `8080`) |
+| `NTFY_TOPIC` | ntfy topic (secret) |
+| `MISTRAL_API_KEY` | Mistral API key (used for captcha + recovery) |
+| `TNPDCL_USERNAME` | TNPDCL login |
+| `TNPDCL_PASSWORD` | TNPDCL login |
 
-Adjust `jobs.json` (ids, schedules, enabled flags, notify titles). Credential fields in JSON reference env var **names**, not plaintext passwords.
-
-Build:
+## Install
 
 ```bash
-npm run build
+npm install
+```
+
+`postinstall` downloads Chromium via Playwright.
+
+## Seed jobs/settings into Mongo
+
+Runtime config is loaded from MongoDB, not `jobs.json`. Seed once (and repeat whenever you intentionally replace seeded config):
+
+```bash
+npm run dev -w @billing-agent/worker -- seed-jobs --from jobs.example.json
 ```
 
 ## Commands
 
 ```bash
-# Run one job by id
-node dist/cli.js run --job smoke-test
-
-# Run every enabled job
-node dist/cli.js run --all
-
-# Built-in scheduler (cron expressions from jobs.json)
-node dist/cli.js daemon
-
-# Custom config path
-node dist/cli.js run --job home-eb --config /path/to/jobs.json
-```
-
-Exit codes: `0` success, `1` one or more jobs failed, `2` usage error (missing `--job` / `--all`).
-
-Development without building:
-
-```bash
-npm run dev -- run --job smoke-test
-```
-
-## Cron example
-
-Prefer one-shot runs so each invocation gets a fresh browser process:
-
-```cron
-0 9 * * * cd /path/to/billing-agent && node dist/cli.js run --job home-eb
-```
-
-Run all enabled jobs on a schedule:
-
-```cron
-0 9 * * * cd /path/to/billing-agent && node dist/cli.js run --all
-```
-
-Ensure `.env` is loaded (cron does not read it automatically). Options: `cd` into the project and rely on dotenv in the CLI, wrap with a small shell script that `source`s env vars, or set variables in the crontab line.
-
-Alternative: `node dist/cli.js daemon` keeps the process alive and schedules jobs from each job’s `schedule` field in `jobs.json`.
-
-## Smoke test (dummy + ntfy)
-
-Verifies the full pipeline except a real provider login:
-
-```bash
-cp jobs.example.json jobs.json   # if you have not already
-# set NTFY_TOPIC in .env (Mistral not required for dummy)
+# Build all workspaces
 npm run build
-node dist/cli.js run --job smoke-test
+
+# Run one job
+npm run dev -w @billing-agent/worker -- run --job smoke-test
+
+# Run all enabled jobs once
+npm run dev -w @billing-agent/worker -- run --all
+
+# Long-running daemon: scheduler + embedded HTTP API
+npm run start
 ```
 
-Expected: exit code `0`; ntfy message titled **Dummy Bill** with body containing `Amount: ₹999.00`.
+Exit codes: `0` success, `1` one or more jobs failed, `2` config/usage errors.
 
-## Adding adapters
+## HTTP API
 
-1. Create `src/adapters/<provider>.ts` implementing `BillingAdapter`:
+Base URL: `http://localhost:${HTTP_PORT:-8080}`
 
-   ```typescript
-   import type { BillingAdapter } from './types.js';
+- `GET /health` (no auth)
+- `GET /runs`
+- `GET /runs/:id`
+- `GET /jobs`
+- `GET /jobs/:id`
+- `POST /jobs`
+- `PATCH /jobs/:id`
+- `DELETE /jobs/:id` (soft-disable via `enabled: false`)
 
-   export const myAdapter: BillingAdapter = {
-     id: 'my-provider',
-     async run(ctx) {
-       // ctx.page, ctx.credentials, ctx.captchaSolver, ctx.logger, …
-       return {
-         provider: 'my-provider',
-         amount: '₹123.00',
-         accountLabel: '****1234',
-       };
-     },
-   };
-   ```
+Auth on all non-health routes:
 
-2. Register it in `src/adapters/registry.ts`:
+```bash
+curl -H "Authorization: Bearer $API_TOKEN" http://localhost:8080/jobs
+```
 
-   ```typescript
-   import { myAdapter } from './my-provider.js';
+Create a job:
 
-   export function registerBuiltInAdapters(): void {
-     registerAdapter(dummyAdapter);
-     registerAdapter(tnpdclAdapter);
-     registerAdapter(myAdapter);
-   }
-   ```
+```bash
+curl -X POST http://localhost:8080/jobs \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "smoke-test",
+    "provider": "dummy",
+    "enabled": true,
+    "schedule": null,
+    "credentialsEnv": {},
+    "notify": { "title": "Dummy Bill" }
+  }'
+```
 
-3. Add a job entry in `jobs.json` with `"provider": "my-provider"` and credential env refs as needed.
+## Postman collection
 
-4. Rebuild and run: `npm run build && node dist/cli.js run --job <your-job-id>`.
+Import:
 
-See `src/adapters/dummy.ts` for a minimal example and `src/adapters/tnpdcl.ts` for captcha + login flow.
+- `postman/billing-agent-api.postman-collection.json`
 
-## Security
+Collection variables:
 
-- **`jobs.json` and `.env` are gitignored** — never commit real topics, passwords, or API keys.
-- Use a private, unguessable `NTFY_TOPIC`; treat it like a password.
-- Error screenshots under `tmp/` may contain portal UI or account hints; restrict filesystem permissions.
-- Run on a trusted host; credentials exist only in process env at runtime.
+- `baseUrl` (default `http://localhost:8080`)
+- `apiToken` (`API_TOKEN` value from your `.env`)
+- `jobId` (default `smoke-test`)
+- `runId` (set after listing runs)
 
-## Tests
+The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
+
+## Overlay learning behavior
+
+- Only recoverable errors are eligible: `LoginError`, `ScrapeError`, `TimeoutError`.
+- Recovery performs at most one model call and one retry per run.
+- Overlay patches are schema-validated (selector/pattern keys only).
+- Successful recoveries increment overlay success count.
+- Overlay auto-activates at `successCount >= 3`.
+
+## Tests and build
 
 ```bash
 npm test
+npm run build
 ```
 
-Unit tests cover config, captcha, notify (mocked HTTP), job runner, dummy adapter (fixture + real Chromium), and TNPDCL helpers. Live TNPDCL login is **not** run in CI—verify `home-eb` manually with real credentials.
+CI/test expectations: mocks only; no live Atlas and no live TNPDCL logins.
 
-## Deploy on Coolify
+## Coolify deployment (single container)
 
-This app is a long-running **daemon** (no HTTP server). Use a Dockerfile build, not Nixpacks.
+- Build with `Dockerfile`.
+- Runtime command is already `worker daemon` (scheduler + embedded API in one process).
+- Set runtime env vars: `MONGODB_URI`, `API_TOKEN`, `HTTP_PORT`, `NTFY_TOPIC`, `MISTRAL_API_KEY`, provider credentials.
+- Expose `HTTP_PORT`.
+- Health check: `GET /health`.
+- Recommended memory: at least 1 GB (Chromium spikes).
 
-Repo already includes:
-
-| File | Purpose |
-| --- | --- |
-| `Dockerfile` | Playwright base image + build + `daemon` CMD |
-| `.dockerignore` | Keeps secrets and local `jobs.json` out of the image |
-| `jobs.coolify.json` | Production job config with `browser.noSandbox: true` |
-
-### Coolify setup
-
-1. **New Resource → Application** from this Git repo.
-2. Build pack: **Dockerfile** (not Nixpacks). Dockerfile location: `/Dockerfile`.
-3. **Disable health checks** (no HTTP endpoint to probe).
-4. **No public domain / ports** required — leave Ports Exposes empty or ignore proxy settings.
-5. **Environment variables** (Runtime, not Build):
-
-   | Variable | Required |
-   | --- | --- |
-   | `NTFY_TOPIC` | yes |
-   | `MISTRAL_API_KEY` | yes (for `tnpdcl`) |
-   | `TNPDCL_USERNAME` | yes |
-   | `TNPDCL_PASSWORD` | yes |
-
-6. **Resources:** give the container **≥1 GB RAM** (Chromium spikes briefly per run).
-7. Deploy. Confirm logs show the scheduler started (e.g. waiting for `0 9 * * *`).
-
-Optional one-shot smoke after deploy (Coolify terminal / exec):
+Optional post-deploy seed:
 
 ```bash
-node dist/cli.js run --job home-eb --config jobs.json
+node apps/worker/dist/cli.js seed-jobs --from jobs.coolify.json
 ```
 
-To change schedules or enable `smoke-test`, edit `jobs.coolify.json` and redeploy (or mount a custom `jobs.json` via Coolify persistent storage over `/app/jobs.json`).
+## apps/web
 
-## Further reading
-
-Architecture and config schema: `docs/superpowers/specs/2026-08-08-billing-agent-design.md`
+`apps/web` is intentionally a stub; the future UI should consume this API via bearer auth.

@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import { solveCaptchaFromLocator } from '../captcha.js';
 import { CaptchaError, LoginError, ScrapeError } from '../errors.js';
+import { mergeSelectors, type SelectorOverlay } from '../overlay.js';
 import type { AdapterContext, BillingAdapter, BillResult } from './types.js';
 
 /**
@@ -13,26 +14,28 @@ import type { AdapterContext, BillingAdapter, BillResult } from './types.js';
  */
 const LOGIN_URL = 'https://www.tnebnet.org/awp/login';
 
-// <input id="userName" name="j_username" type="text" ... />
-const USERNAME_SELECTOR = '#userName';
-// <input id="password" name="j_password" type="password" ... />
-const PASSWORD_SELECTOR = '#password';
-// <input id="CaptchaID" name="CaptchaID" maxlength="10" ... />
-const CAPTCHA_INPUT_SELECTOR = '#CaptchaID';
-// <img id="CaptchaImgID" src="/awp/simpleCaptcha.png" ... />
-const CAPTCHA_IMAGE_SELECTOR = '#CaptchaImgID';
-// <input name="submit" type="submit" value="Login" ... />
-const LOGIN_BUTTON_SELECTOR = 'input[name="submit"][type="submit"]';
-// Only inspect dedicated messages inside the login form. The full page always
-// contains captcha instructions, which makes body-text classification unsafe.
-const LOGIN_ERROR_SELECTOR = [
+const defaultLoginSelectors = {
+  // <input id="userName" name="j_username" type="text" ... />
+  username: '#userName',
+  // <input id="password" name="j_password" type="password" ... />
+  password: '#password',
+  // <input id="CaptchaID" name="CaptchaID" maxlength="10" ... />
+  captchaInput: '#CaptchaID',
+  // <img id="CaptchaImgID" src="/awp/simpleCaptcha.png" ... />
+  captchaImage: '#CaptchaImgID',
+  // <input name="submit" type="submit" value="Login" ... />
+  loginButton: 'input[name="submit"][type="submit"]',
+  // Only inspect dedicated messages inside the login form. The full page always
+  // contains captcha instructions, which makes body-text classification unsafe.
+  loginError: [
   '#lin .ui-messages-error-summary',
   '#lin .ui-messages-error-detail',
   '#lin .ui-message-error-detail',
   '#lin [role="alert"]',
   '#lin .error',
   '#lin .errors',
-].join(', ');
+  ].join(', '),
+} as const;
 // The form (`#lin`, action="/awp/logincheck") runs `encryptPassword()` in
 // its onsubmit handler, which obfuscates the plaintext password in-place
 // before the real POST. We only need to `fill()` the plaintext password;
@@ -75,7 +78,7 @@ async function clickAndWaitForNavigation(
  * seen on TANGEDCO/TNPDCL bill pages; adjust here (only) once the real
  * page is inspected manually.
  */
-const FIELD_PATTERNS: Record<string, RegExp[]> = {
+const defaultFieldPatterns: Record<string, RegExp[]> = {
   amount: [
     /bill\s*amount[^\d₹]{0,10}(₹?\s?[\d,]+(?:\.\d+)?)/i,
     /amount\s*payable[^\d₹]{0,10}(₹?\s?[\d,]+(?:\.\d+)?)/i,
@@ -88,6 +91,14 @@ const FIELD_PATTERNS: Record<string, RegExp[]> = {
   billPeriod: [/bill\s*(?:period|month)\s*[:\-]?\s*([A-Za-z0-9/\-\s]{3,20})/i],
   status: [/(?:bill\s*)?status\s*[:\-]?\s*(paid|unpaid|due|pending|overdue)/i],
 };
+
+const fieldOverlayKeyMap = {
+  amount: 'amount',
+  account: 'accountLabel',
+  dueDate: 'dueDate',
+  billPeriod: 'billPeriod',
+  status: 'status',
+} as const;
 
 export const BILL_PAYMENTS_TBODY_ID = 'form:selectedbill_data';
 export const DISCONNECTED_TBODY_ID = 'form:selectedbillr_data';
@@ -205,6 +216,26 @@ function normalizeAmount(raw: string): string {
   return raw.startsWith('₹') ? raw : `₹${raw}`;
 }
 
+function parsePatternSources(raw: string | string[]): RegExp[] {
+  const sources = Array.isArray(raw) ? raw : [raw];
+  return sources.map((source) => new RegExp(source, 'i'));
+}
+
+function resolveFieldPatterns(overlay?: SelectorOverlay): Record<string, RegExp[]> {
+  if (!overlay) return defaultFieldPatterns;
+  const merged: Record<string, RegExp[]> = { ...defaultFieldPatterns };
+  for (const [field, overlayKey] of Object.entries(fieldOverlayKeyMap)) {
+    const override = overlay[overlayKey];
+    if (!override) continue;
+    try {
+      merged[field] = parsePatternSources(override);
+    } catch {
+      // Ignore invalid overlay regex sources and keep defaults.
+    }
+  }
+  return merged;
+}
+
 async function navigateToBillPageIfNeeded(page: Page, ctx: AdapterContext): Promise<void> {
   try {
     const billLink = page
@@ -223,6 +254,7 @@ async function navigateToBillPageIfNeeded(page: Page, ctx: AdapterContext): Prom
 
 async function scrapeBill(page: Page, ctx: AdapterContext): Promise<BillResult> {
   await navigateToBillPageIfNeeded(page, ctx);
+  const fieldPatterns = resolveFieldPatterns(ctx.overlay);
 
   const html = await page.content();
   const noPending = buildNoPendingBillResultFromHtml(html);
@@ -233,15 +265,15 @@ async function scrapeBill(page: Page, ctx: AdapterContext): Promise<BillResult> 
 
   const pageText = await page.locator('body').innerText();
 
-  const amount = extractRequiredField(pageText, 'amount', FIELD_PATTERNS.amount);
-  const accountRaw = extractRequiredField(pageText, 'account', FIELD_PATTERNS.account);
+  const amount = extractRequiredField(pageText, 'amount', fieldPatterns.amount);
+  const accountRaw = extractRequiredField(pageText, 'account', fieldPatterns.account);
 
   return {
     provider: 'tnpdcl',
     amount: normalizeAmount(amount),
-    dueDate: tryExtractField(pageText, FIELD_PATTERNS.dueDate),
-    billPeriod: tryExtractField(pageText, FIELD_PATTERNS.billPeriod),
-    status: tryExtractField(pageText, FIELD_PATTERNS.status),
+    dueDate: tryExtractField(pageText, fieldPatterns.dueDate),
+    billPeriod: tryExtractField(pageText, fieldPatterns.billPeriod),
+    status: tryExtractField(pageText, fieldPatterns.status),
     accountLabel: maskAccount(accountRaw),
   };
 }
@@ -256,25 +288,26 @@ async function attemptLoginAndScrape(ctx: AdapterContext): Promise<BillResult> {
   }
 
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
+  const selectors = mergeSelectors(defaultLoginSelectors, ctx.overlay);
 
-  await page.locator(USERNAME_SELECTOR).fill(username);
-  await page.locator(PASSWORD_SELECTOR).fill(password);
+  await page.locator(selectors.username).fill(username);
+  await page.locator(selectors.password).fill(password);
 
   const captchaText = await solveCaptchaFromLocator(
-    page.locator(CAPTCHA_IMAGE_SELECTOR),
+    page.locator(selectors.captchaImage),
     captchaSolver,
   );
-  await page.locator(CAPTCHA_INPUT_SELECTOR).fill(captchaText);
+  await page.locator(selectors.captchaInput).fill(captchaText);
 
   await clickAndWaitForNavigation(
     page,
-    page.locator(LOGIN_BUTTON_SELECTOR),
+    page.locator(selectors.loginButton),
     ctx.timeoutMs,
   );
 
-  const stillOnLoginForm = (await page.locator(USERNAME_SELECTOR).count()) > 0;
+  const stillOnLoginForm = (await page.locator(selectors.username).count()) > 0;
   if (stillOnLoginForm) {
-    const messages = await page.locator(LOGIN_ERROR_SELECTOR).allInnerTexts();
+    const messages = await page.locator(selectors.loginError).allInnerTexts();
     if (messages.some((message) => classifyLoginFailure(message) === 'captcha')) {
       throw new CaptchaError('tnpdcl login rejected the captcha response');
     }

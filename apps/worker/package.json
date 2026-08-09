@@ -1,0 +1,29 @@
+{
+  "name": "@billing-agent/worker",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/cli.js",
+  "types": "dist/cli.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "npm run build -w @billing-agent/core && tsx --test tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@billing-agent/api": "*",
+    "@billing-agent/core": "*",
+    "commander": "^13.1.0",
+    "dotenv": "^16.5.0",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  },
+  "bin": {
+    "billing-agent": "dist/cli.js"
+  }
+}
