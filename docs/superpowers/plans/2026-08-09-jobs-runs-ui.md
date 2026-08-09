@@ -18,6 +18,7 @@
 - Soft-disable only (`DELETE /jobs/:id`); disabled jobs stay listed
 - No websockets; poll run detail ~2s while `running`
 - Prefer Cleanplate props for spacing (suffix-only); SCSS modules for layout
+- Jobs and Runs `Table`s **must** set `mobileColumns` so viewport &lt; 768px renders Cleanplate `MediaObject` cards (never rely on the default narrow table)
 - Never log or render the full API token
 - Match `POST /jobs/:jobId/run` **before** generic `/jobs/:id` handlers
 
@@ -760,6 +761,26 @@ Mock `jobs-api` to return one enabled job. Render `JobsPage` inside `MemoryRoute
 
 Use Cleanplate `PageHeader` (primary CTA → `/jobs/new`), `Table` columns: id, provider, enabled (`Badge`), schedule (`humanizeCron`), notify title, actions (`Button`s).
 
+**Required:** pass `mobileColumns` so &lt;768px uses `MediaObject` cards. Shape row data so mobile slots resolve (string keys and/or resolvers). Example:
+
+```tsx
+<Table
+  columns={columns}
+  data={rows}
+  mobileColumns={{
+    title: 'id',
+    subtitle: (row) => `${row.provider} · ${row.scheduleLabel}`,
+    meta: (row) => row.enabledLabel,
+    description: 'notifyTitle',
+    action: (row) => (
+      {/* same Run / Edit / Disable|Enable controls as desktop actions column */}
+    ),
+  }}
+/>
+```
+
+Ensure desktop `customRender` cells and mobile `action` stay behaviorally equivalent (Run/Edit/Disable|Enable). Precompute display fields on each row (`scheduleLabel`, `notifyTitle`, `enabledLabel`) so `mobileColumns` keys work without relying on React nodes in row data.
+
 - Disable: `ConfirmDialog` then `disableJob`
 - Enable: `updateJob(id, { enabled: true })`
 - Run now: disabled when `!job.enabled`; on 202 `navigate(\`/runs/${id}\`)`; on error show `Alert`
@@ -843,6 +864,19 @@ Use `vi.useFakeTimers()` carefully with Testing Library `waitFor`.
 
 Filters: job `FormControls.Select` (all + job ids), status select. Fetch `listRuns({ limit: 100, jobId? })`; client-filter status. `Table` `onRowClick` → `/runs/:id`.
 
+**Required:** set `mobileColumns` for MediaObject cards under 768px:
+
+```tsx
+mobileColumns={{
+  title: 'id',
+  subtitle: (row) => `${row.jobId} · ${row.provider}`,
+  meta: (row) => row.statusLabel, // or customRender-equivalent string/node via resolver
+  description: (row) => row.timingLabel, // started + duration
+}}
+```
+
+Precompute `statusLabel` / `timingLabel` on row objects. Keep `onRowClick` for navigation on both desktop rows and mobile cards.
+
 - [ ] **Step 3: Implement Run detail**
 
 Show fields from spec. `useEffect` interval 2000ms while `status === 'running'`; clear on unmount / terminal. Links back to `/runs` and `/jobs/:jobId`.
@@ -892,6 +926,7 @@ git commit -m "docs: document jobs/runs UI and Run now API"
 | Spec requirement | Task |
 | --- | --- |
 | Jobs table + humanized schedule | 5, 7 |
+| Jobs/Runs `mobileColumns` → MediaObject cards | 7, 9 |
 | Create/edit job + credentialsEnv names | 8 |
 | Soft-disable / enable; disabled stay listed | 7 |
 | Run now → 202 → run detail | 2, 3, 6, 7, 9 |

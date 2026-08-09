@@ -36,6 +36,7 @@ Operators can call the HTTP API (and use the web TokenGate + status shell), but 
 | Navigation | `react-router-dom`; `/` redirects to `/jobs` |
 | Jobs list layout | Dense Cleanplate `Table` with row actions |
 | Runs list layout | Full table + filters; row navigates to detail (no drawer) |
+| Table mobile | Always set Cleanplate `mobileColumns` on Jobs and Runs tables so viewport &lt; 768px renders `MediaObject` cards (not a squeezed table) |
 | Run progress | Full-page `/runs/:runId`; poll ~2s while `running` |
 | Credentials | `credentialsEnv` key → env name pairs only |
 | Delete | Soft-disable via existing `DELETE /jobs/:id`; disabled jobs stay listed with badge |
@@ -118,6 +119,16 @@ Actions per row:
 - **Edit** — navigate to `/jobs/:jobId`
 - **Disable** / **Enable** — Disable uses `ConfirmDialog` then `DELETE`; Enable uses `PATCH` `{ enabled: true }`
 
+**Responsive (`mobileColumns` required):** When viewport &lt; 768px, Cleanplate `Table` switches each row to a `MediaObject` card. Configure explicitly (do not omit — without `mobileColumns` the desktop table stays):
+
+| MediaObject slot | Mapping |
+| --- | --- |
+| `title` | job `id` |
+| `subtitle` | `provider` + humanized schedule |
+| `meta` | enabled badge / label |
+| `description` | notify title |
+| `action` | Run / Edit / Disable\|Enable controls |
+
 Schedule humanize (client helper):
 
 - `null` / empty → “Manual only”
@@ -143,6 +154,16 @@ Filters: job id, status (`running` \| `success` \| `failed`).
 Columns: Run id, Job, Provider, Status badge, Started, Duration.
 
 Row click → `/runs/:runId`. Use API `jobId` + `limit`; client-side status filter and Table pagination as needed.
+
+**Responsive (`mobileColumns` required):** Same Cleanplate rule — viewport &lt; 768px → `MediaObject` cards:
+
+| MediaObject slot | Mapping |
+| --- | --- |
+| `title` | run `id` (or short id) |
+| `subtitle` | `jobId` · `provider` |
+| `meta` | status badge |
+| `description` | started + duration |
+| `action` | optional affordance; whole-row `onRowClick` still navigates to detail |
 
 ### Run detail (`/runs/:runId`)
 
