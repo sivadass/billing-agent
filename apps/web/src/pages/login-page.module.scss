@@ -1,0 +1,17 @@
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: linear-gradient(160deg, var(--gray-10) 0%, var(--gray-20) 100%);
+}
+
+.card {
+  width: min(100%, 26rem);
+  background: var(--white);
+}
+
+.muted {
+  color: var(--text-muted);
+}

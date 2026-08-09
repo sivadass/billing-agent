@@ -8,7 +8,7 @@ describe('jobs and runs API helpers', () => {
   beforeEach(() => {
     sessionStorage.clear();
     vi.stubEnv('VITE_API_BASE_URL', 'http://127.0.0.1:8080');
-    vi.stubEnv('VITE_API_TOKEN', 'env-token');
+    sessionStorage.setItem('billing-agent.jwt', 'jwt-token');
   });
 
   afterEach(() => {

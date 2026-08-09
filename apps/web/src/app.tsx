@@ -1,18 +1,20 @@
-import { useState } from 'react';
-import { AppShell, Container } from 'cleanplate';
+import { AppShell, Button, Container } from 'cleanplate';
 import {
   BrowserRouter,
   Navigate,
+  Outlet,
   Route,
   Routes,
   useLocation,
   useNavigate,
 } from 'react-router-dom';
+import { ProtectedRoute } from './components/protected-route';
+import { clearAccessToken } from './lib/auth-token';
 import { JobFormPage } from './pages/job-form-page';
 import { JobsPage } from './pages/jobs-page';
+import { LoginPage } from './pages/login-page';
 import { RunDetailPage } from './pages/run-detail-page';
 import { RunsPage } from './pages/runs-page';
-import { SettingsPage } from './pages/settings-page';
 import { StatusPage } from './pages/status-page';
 import styles from './app.module.scss';
 
@@ -20,28 +22,44 @@ const MENU: Array<{ label: string; value: string; icon: any }> = [
   { label: 'Jobs', value: '/jobs', icon: 'work' },
   { label: 'Runs', value: '/runs', icon: 'history' },
   { label: 'Status', value: '/status', icon: 'monitor_heart' },
-  { label: 'Settings', value: '/settings', icon: 'settings' },
 ];
 
 export function App() {
   return (
     <BrowserRouter>
-      <AppLayout />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route element={<AppShellLayout />}>
+            <Route path="/" element={<Navigate to="/jobs" replace />} />
+            <Route path="/jobs" element={<JobsPage />} />
+            <Route path="/jobs/new" element={<JobFormPage />} />
+            <Route path="/jobs/:jobId" element={<JobFormPage />} />
+            <Route path="/runs" element={<RunsPage />} />
+            <Route path="/runs/:runId" element={<RunDetailPage />} />
+            <Route path="/status" element={<StatusPage />} />
+          </Route>
+        </Route>
+        <Route path="*" element={<Navigate to="/jobs" replace />} />
+      </Routes>
     </BrowserRouter>
   );
 }
 
-export function AppLayout() {
-  const [tokenEpoch, setTokenEpoch] = useState(0);
+export function AppShellLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const activeMenu = MENU.find((item) => location.pathname.startsWith(item.value))?.value ?? '/jobs';
+  const activeMenu =
+    MENU.find((item) => location.pathname.startsWith(item.value))?.value ?? '/jobs';
 
   const onMenuClick = (item: { value: string }) => {
     navigate(item.value);
   };
 
-  const onTokenChange = () => setTokenEpoch((value) => value + 1);
+  const onLogout = () => {
+    clearAccessToken();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <AppShell
@@ -58,19 +76,15 @@ export function AppLayout() {
         activeMenuItem: activeMenu,
         onMenuItemClick: onMenuClick,
         showCenterMenu: false,
+        headerRight: (
+          <Button variant="outline" size="small" onClick={onLogout}>
+            Log out
+          </Button>
+        ),
       }}
     >
       <Container className={styles['app-root']} padding="4">
-        <Routes key={tokenEpoch}>
-          <Route path="/" element={<Navigate to="/jobs" replace />} />
-          <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/jobs/new" element={<JobFormPage />} />
-          <Route path="/jobs/:jobId" element={<JobFormPage />} />
-          <Route path="/runs" element={<RunsPage />} />
-          <Route path="/runs/:runId" element={<RunDetailPage />} />
-          <Route path="/status" element={<StatusPage />} />
-          <Route path="/settings" element={<SettingsPage onTokenChange={onTokenChange} />} />
-        </Routes>
+        <Outlet />
       </Container>
     </AppShell>
   );
