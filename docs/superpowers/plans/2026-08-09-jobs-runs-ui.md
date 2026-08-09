@@ -172,7 +172,7 @@ git commit -m "feat(core): notify onRunCreated after run record is created"
   - `RouteContext.onRunJob?: (jobId: string) => Promise<string>`
   - `POST /jobs/:jobId/run` → 202 `{ id: string }` | 404 | 409 | 503
 
-- [ ] **Step 1: Fix `MemoryStore.listRuns` and write failing run-trigger tests**
+- [x] **Step 1: Fix `MemoryStore.listRuns` and write failing run-trigger tests**
 
 Replace `MemoryStore.listRuns` in `apps/api/tests/api.test.ts` with:
 
@@ -310,13 +310,13 @@ describe('POST /jobs/:id/run', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `node --import tsx --test apps/api/tests/api.test.ts`
 
 Expected: FAIL on new cases (404 from unknown route or missing `onRunJob` typing).
 
-- [ ] **Step 3: Implement server + route**
+- [x] **Step 3: Implement server + route**
 
 `apps/api/src/server.ts`:
 
@@ -370,13 +370,13 @@ void handleRoute(req, res, {
 
 Ensure path parsing does not leave a trailing slash; job ids must not contain `/`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `node --import tsx --test apps/api/tests/api.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/server.ts apps/api/src/routes.ts apps/api/tests/api.test.ts

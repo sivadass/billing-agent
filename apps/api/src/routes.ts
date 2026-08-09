@@ -5,6 +5,7 @@ import { requireBearerAuth } from './auth.js';
 export type RouteContext = {
   token: string;
   store: BillingStore;
+  onRunJob?: (jobId: string) => Promise<string>;
 };
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
@@ -120,6 +121,36 @@ export async function handleRoute(
   if (method === 'GET' && pathname === '/jobs') {
     const jobs = await ctx.store.listJobs();
     sendJson(res, 200, jobs);
+    return;
+  }
+
+  if (method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/run')) {
+    const rawJobId = pathname.slice('/jobs/'.length, -'/run'.length);
+    if (!rawJobId || rawJobId.endsWith('/') || rawJobId.includes('/')) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+    const jobId = decodeURIComponent(rawJobId);
+    if (!ctx.onRunJob) {
+      sendJson(res, 503, { error: 'Runner unavailable' });
+      return;
+    }
+    const job = await ctx.store.getJob(jobId);
+    if (!job) {
+      sendJson(res, 404, { error: 'Job not found' });
+      return;
+    }
+    if (!job.enabled) {
+      sendJson(res, 409, { error: 'Job disabled' });
+      return;
+    }
+    const recent = await ctx.store.listRuns({ jobId, limit: 20 });
+    if (recent.some((run) => run.status === 'running')) {
+      sendJson(res, 409, { error: 'Job already running' });
+      return;
+    }
+    const runId = await ctx.onRunJob(jobId);
+    sendJson(res, 202, { id: runId });
     return;
   }
 
