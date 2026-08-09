@@ -1,0 +1,27 @@
+/**
+ * Billing Agent theme overrides for Cleanplate.
+ * Colors extracted from apps/web/public/billing-agent-logo.svg:
+ *   Primary   #843c3c  (deep rose / burgundy mark + wordmark)
+ *   Secondary #cb8383  (lighter rose mark layer)
+ */
+:root {
+  --billing-primary: #843c3c;
+  --billing-secondary: #cb8383;
+  --billing-primary-soft: #f7f0f0;
+  --billing-secondary-soft: #f3e4e4;
+
+  --primary-brand: var(--billing-primary);
+  --primary-brand-darker: #6e3232;
+  --primary-brand-darkest: #5a2929;
+  --primary-brand-light: #b56e6e;
+  --primary-brand-lightest: #e8cfcf;
+
+  --secondary-brand: var(--billing-secondary);
+  --secondary-brand-light: var(--billing-secondary-soft);
+  --secondary-brand-medium: #d9a0a0;
+
+  /* Keep success/error/warning semantic, but soft backgrounds can pick up brand warmth */
+  --gray-10: var(--billing-primary-soft);
+  --gray-50: #faf6f6;
+  --gray-100: #f3eaea;
+}
