@@ -583,7 +583,7 @@ git commit -m "feat(web): add AppShell routes for Jobs, Runs, and Status"
 - Consumes: cron string | null
 - Produces: `humanizeCron(schedule: string | null | undefined): string`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -607,13 +607,13 @@ describe('humanizeCron', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm run test -w @billing-agent/web -- src/lib/cron-humanize.test.ts`
 
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 function formatClock(hour: number, minute: number): string {
@@ -643,13 +643,13 @@ export function humanizeCron(schedule: string | null | undefined): string {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm run test -w @billing-agent/web -- src/lib/cron-humanize.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/lib/cron-humanize.ts apps/web/src/lib/cron-humanize.test.ts
