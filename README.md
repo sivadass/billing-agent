@@ -148,7 +148,7 @@ CI/test expectations: mocks only; no live Atlas and no live TNPDCL logins.
 
 ## Coolify deployment (single container)
 
-- Build with `Dockerfile`.
+- Build with `Dockerfile` (`npm run build:server` — core/api/worker only; web SPA is not included).
 - Runtime command is already `worker daemon` (scheduler + embedded API in one process).
 - Set runtime env vars: `MONGODB_URI`, `API_TOKEN`, `HTTP_PORT`, `CORS_ORIGINS`, `NTFY_TOPIC`, `MISTRAL_API_KEY`, provider credentials.
 - Expose `HTTP_PORT`.

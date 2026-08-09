@@ -13,8 +13,10 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY packages ./packages
-COPY apps ./apps
-RUN npm run build
+COPY apps/api ./apps/api
+COPY apps/worker ./apps/worker
+# Web SPA is hosted separately (Vercel); do not build it in the worker image.
+RUN npm run build:server
 
 FROM mcr.microsoft.com/playwright:v1.52.0-jammy
 
