@@ -207,12 +207,12 @@ node apps/worker/dist/cli.js migrate-job-owners --email you@example.com
 
 ## Web UI (`apps/web`)
 
-Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override under **Settings**). The web shell provides Jobs, Runs, Status, and Settings hubs with router URLs:
+Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` with a Bearer JWT from `/login` (stored in `sessionStorage`). Protected hubs:
 
+- `/login` (public)
 - `/jobs`, `/jobs/new`, `/jobs/:jobId`
 - `/runs`, `/runs/:runId` (polls run detail while running)
 - `/status`
-- `/settings` (API token session override)
 
 ```bash
 npm run dev:web
