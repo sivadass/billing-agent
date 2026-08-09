@@ -845,7 +845,7 @@ git commit -m "feat(web): add job create and edit form"
 - Consumes: `listRuns`, `getRun`, `listJobs` (for filter options)
 - Produces: `/runs` table + `/runs/:runId` polling detail
 
-- [ ] **Step 1: Failing test for polling stop**
+- [x] **Step 1: Failing test for polling stop**
 
 ```tsx
 it('stops polling once status is success', async () => {
@@ -860,7 +860,7 @@ it('stops polling once status is success', async () => {
 
 Use `vi.useFakeTimers()` carefully with Testing Library `waitFor`.
 
-- [ ] **Step 2: Implement Runs page**
+- [x] **Step 2: Implement Runs page**
 
 Filters: job `FormControls.Select` (all + job ids), status select. Fetch `listRuns({ limit: 100, jobId? })`; client-filter status. `Table` `onRowClick` → `/runs/:id`.
 
@@ -877,11 +877,11 @@ mobileColumns={{
 
 Precompute `statusLabel` / `timingLabel` on row objects. Keep `onRowClick` for navigation on both desktop rows and mobile cards.
 
-- [ ] **Step 3: Implement Run detail**
+- [x] **Step 3: Implement Run detail**
 
 Show fields from spec. `useEffect` interval 2000ms while `status === 'running'`; clear on unmount / terminal. Links back to `/runs` and `/jobs/:jobId`.
 
-- [ ] **Step 4: Tests PASS + commit**
+- [x] **Step 4: Tests PASS + commit**
 
 ```bash
 git add apps/web/src/components/runs-table.tsx apps/web/src/pages/runs-page.tsx apps/web/src/pages/run-detail-page.tsx apps/web/src/pages/run-detail-page.test.tsx apps/web/src/pages/runs-page.test.tsx
