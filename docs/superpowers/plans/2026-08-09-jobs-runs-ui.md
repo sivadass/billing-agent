@@ -897,11 +897,11 @@ git commit -m "feat(web): add Runs hub and live run detail polling"
 - Modify: `README.md` (root) if it still describes status-only UI
 - Modify: `postman/billing-agent-api.postman-collection.json` — add `POST /jobs/:id/run` request
 
-- [ ] **Step 1: Update README** — document hubs, routes, Run now, humanized schedule, soft-disable, required daemon for triggers
+- [x] **Step 1: Update README** — document hubs, routes, Run now, humanized schedule, soft-disable, required daemon for triggers
 
-- [ ] **Step 2: Add Postman request** for `POST {{baseUrl}}/jobs/{{jobId}}/run` with Bearer auth
+- [x] **Step 2: Add Postman request** for `POST {{baseUrl}}/jobs/{{jobId}}/run` with Bearer auth
 
-- [ ] **Step 3: Full test suite**
+- [x] **Step 3: Full test suite**
 
 ```bash
 npm test
@@ -912,7 +912,7 @@ npm run build -w @billing-agent/core
 
 Expected: all PASS / build OK.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/web/README.md README.md postman/billing-agent-api.postman-collection.json

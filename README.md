@@ -89,6 +89,7 @@ Base URL: `http://localhost:${HTTP_PORT:-8080}`
 - `GET /jobs`
 - `GET /jobs/:id`
 - `POST /jobs`
+- `POST /jobs/:id/run` (manual trigger, returns `202 { id }`)
 - `PATCH /jobs/:id`
 - `DELETE /jobs/:id` (soft-disable via `enabled: false`)
 
@@ -127,7 +128,7 @@ Collection variables:
 - `jobId` (default `smoke-test`)
 - `runId` (set after listing runs)
 
-The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
+The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
 
 ## Overlay learning behavior
 
@@ -163,7 +164,11 @@ node apps/worker/dist/cli.js seed-jobs --from jobs.coolify.json
 
 ## Web UI (`apps/web`)
 
-Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override).
+Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override). The web shell provides Jobs, Runs, and Status hubs with router URLs:
+
+- `/jobs`, `/jobs/new`, `/jobs/:jobId`
+- `/runs`, `/runs/:runId` (polls run detail while running)
+- `/status`
 
 ```bash
 npm run dev:web

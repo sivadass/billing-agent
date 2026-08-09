@@ -87,6 +87,13 @@
           }
         },
         {
+          "name": "Run Job Now",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/jobs/{{jobId}}/run"
+          }
+        },
+        {
           "name": "Create Job",
           "request": {
             "method": "POST",
