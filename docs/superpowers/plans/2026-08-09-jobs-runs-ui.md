@@ -753,11 +753,11 @@ git commit -m "feat(web): add jobs and runs API client helpers"
 - Consumes: `listJobs`, `runJobNow`, `disableJob`, `updateJob`, `humanizeCron`
 - Produces: Jobs hub with Run / Edit / Disable|Enable
 
-- [ ] **Step 1: Write failing page test**
+- [x] **Step 1: Write failing page test**
 
 Mock `jobs-api` to return one enabled job. Render `JobsPage` inside `MemoryRouter`. Assert schedule humanized text and that clicking Run calls `runJobNow` and navigates (use `createMemoryRouter` + `RouterProvider` or mock `useNavigate`).
 
-- [ ] **Step 2: Implement table + page**
+- [x] **Step 2: Implement table + page**
 
 Use Cleanplate `PageHeader` (primary CTA → `/jobs/new`), `Table` columns: id, provider, enabled (`Badge`), schedule (`humanizeCron`), notify title, actions (`Button`s).
 
@@ -786,9 +786,9 @@ Ensure desktop `customRender` cells and mobile `action` stay behaviorally equiva
 - Run now: disabled when `!job.enabled`; on 202 `navigate(\`/runs/${id}\`)`; on error show `Alert`
 - Edit: `navigate(\`/jobs/${id}\`)`
 
-- [ ] **Step 3: Tests PASS**
+- [x] **Step 3: Tests PASS**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/web/src/components/jobs-table.tsx apps/web/src/components/jobs-table.module.scss apps/web/src/pages/jobs-page.tsx apps/web/src/pages/jobs-page.test.tsx
