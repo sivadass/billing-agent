@@ -1,0 +1,10 @@
+---
+description: Enforce SCSS best practices, kebab naming, and file organization.
+globs: src/**/*.scss
+alwaysApply: false
+---
+
+- Use `cp` prefix for root level or module level selectors, to avoiding collision of styles with consuming apps. Example: `.cp-side-menu`.
+- Use `kebab-cased` class names with SCSS nesting
+- Never use hard-coded values, use the CSS variables in the "reset.scss"
+- **Property Order**: Use a logical property order (Layout -> Box Model -> Typography -> Visual).
