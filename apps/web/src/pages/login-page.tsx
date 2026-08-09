@@ -1,4 +1,4 @@
-import { Alert, Button, Container, FormControls, Typography } from 'cleanplate';
+import { Alert, Button, Container, FormControls } from 'cleanplate';
 import { FormEvent, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { login } from '../lib/auth-api';
