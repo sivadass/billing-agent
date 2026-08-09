@@ -47,12 +47,6 @@ export function LoginPage() {
           width={159}
           height={32}
         />
-        <Typography variant="h2" margin="b-2" className={styles.title}>
-          Sign in
-        </Typography>
-        <Typography variant="p" margin="b-4" className={styles.support}>
-          Use your account email and password to continue.
-        </Typography>
         <form onSubmit={(event) => void onSubmit(event)}>
           <FormControls.Input
             label="Email"

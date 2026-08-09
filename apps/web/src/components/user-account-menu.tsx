@@ -28,7 +28,7 @@ function AccountMenuContent({
     <>
       <div style={ACCOUNT_META_STYLE}>
         <Typography variant="small" margin="0" style={{ color: 'var(--text-muted)' }}>
-          Signed in as
+          Signed in as &nbsp;
         </Typography>
         <Typography
           variant="small"
