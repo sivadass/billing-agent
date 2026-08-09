@@ -468,13 +468,13 @@ git commit -m "feat(worker): wire onRunJob for manual API runs"
 - Consumes: Cleanplate `AppShell` / `Header`, `TokenGate`
 - Produces: Routes `/` → `/jobs`, `/jobs`, `/runs`, `/status` (stubs OK except status)
 
-- [ ] **Step 1: Install dependency**
+- [x] **Step 1: Install dependency**
 
 ```bash
 npm install react-router-dom -w @billing-agent/web
 ```
 
-- [ ] **Step 2: Write failing router smoke test**
+- [x] **Step 2: Write failing router smoke test**
 
 `apps/web/src/app-shell.test.tsx`:
 
@@ -522,13 +522,13 @@ export function AppLayout() { /* shell + Routes */ }
 
 and test `AppLayout` with `MemoryRouter`.
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `npm run test -w @billing-agent/web -- src/app-shell.test.tsx`
 
 Expected: FAIL (no Jobs heading / no router).
 
-- [ ] **Step 4: Implement shell**
+- [x] **Step 4: Implement shell**
 
 Move status page files into `pages/`. Stub jobs/runs pages with `PageHeader` / `Typography` title “Jobs” / “Runs”.
 
@@ -558,13 +558,13 @@ Use `useNavigate` / `useLocation` for active item + navigation. Include `TokenGa
 
 Minimal stubs for form/detail pages are fine (`Typography` placeholder) until later tasks fill them in — create empty stub files in this task so routes compile.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `npm run test -w @billing-agent/web`
 
 Expected: PASS (including existing token/api-client tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/package.json package-lock.json apps/web/src
