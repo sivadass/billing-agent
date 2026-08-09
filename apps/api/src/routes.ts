@@ -1,11 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { BillingStore, JobDocument, SettingsDocument } from '@billing-agent/core';
-import { requireBearerAuth } from './auth.js';
+import { verifyPassword } from '@billing-agent/core';
+import { requireJwtAuth } from './auth.js';
+import { signAccessToken } from './jwt.js';
 
 export type RouteContext = {
-  token: string;
+  jwtSecret: string;
   store: BillingStore;
   onRunJob?: (jobId: string) => Promise<string>;
+  authUser?: { id: string; email: string };
 };
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
@@ -28,10 +31,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function coerceJobDocument(payload: unknown, fallback?: JobDocument): JobDocument {
+function coerceJobDocument(
+  payload: unknown,
+  userId: string,
+  fallback?: JobDocument,
+): JobDocument {
   if (!isObject(payload)) throw new Error('job payload must be an object');
   const base = fallback ?? {
     id: '',
+    userId,
     provider: '',
     enabled: true,
     schedule: null,
@@ -41,6 +49,7 @@ function coerceJobDocument(payload: unknown, fallback?: JobDocument): JobDocumen
 
   const job: JobDocument = {
     id: typeof payload.id === 'string' ? payload.id : base.id,
+    userId,
     provider: typeof payload.provider === 'string' ? payload.provider : base.provider,
     enabled: typeof payload.enabled === 'boolean' ? payload.enabled : base.enabled,
     schedule:
@@ -77,6 +86,44 @@ async function bumpJobsGeneration(store: BillingStore): Promise<void> {
   await store.upsertSettings(updated);
 }
 
+async function handleLogin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: RouteContext,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const email = isObject(body) && typeof body.email === 'string' ? body.email.toLowerCase() : '';
+  const password = isObject(body) && typeof body.password === 'string' ? body.password : '';
+
+  const invalidCredentials = () =>
+    sendJson(res, 401, { error: 'Invalid email or password' });
+
+  if (!email || !password) {
+    invalidCredentials();
+    return;
+  }
+
+  const user = await ctx.store.findUserByEmail(email);
+  if (!user) {
+    invalidCredentials();
+    return;
+  }
+
+  const passwordMatches = await verifyPassword(password, user.passwordHash);
+  if (!passwordMatches) {
+    invalidCredentials();
+    return;
+  }
+
+  const token = await signAccessToken({
+    userId: user.id,
+    email: user.email,
+    secret: ctx.jwtSecret,
+  });
+
+  sendJson(res, 200, { token, user: { id: user.id, email: user.email } });
+}
+
 export async function handleRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -91,7 +138,13 @@ export async function handleRoute(
     return;
   }
 
-  if (!requireBearerAuth(req, res, ctx.token)) {
+  if (method === 'POST' && pathname === '/auth/login') {
+    await handleLogin(req, res, ctx);
+    return;
+  }
+
+  const user = await requireJwtAuth(req, res, ctx.jwtSecret);
+  if (!user) {
     return;
   }
 
@@ -100,6 +153,7 @@ export async function handleRoute(
     const limitText = url.searchParams.get('limit');
     const limit = limitText ? Number(limitText) : undefined;
     const runs = await ctx.store.listRuns({
+      userId: user.userId,
       jobId,
       limit: Number.isFinite(limit) ? limit : undefined,
     });
@@ -110,7 +164,7 @@ export async function handleRoute(
   if (method === 'GET' && pathname.startsWith('/runs/')) {
     const runId = decodeURIComponent(pathname.slice('/runs/'.length));
     const run = await ctx.store.getRun(runId);
-    if (!run) {
+    if (!run || run.userId !== user.userId) {
       sendJson(res, 404, { error: 'Run not found' });
       return;
     }
@@ -119,7 +173,7 @@ export async function handleRoute(
   }
 
   if (method === 'GET' && pathname === '/jobs') {
-    const jobs = await ctx.store.listJobs();
+    const jobs = await ctx.store.listJobs({ userId: user.userId });
     sendJson(res, 200, jobs);
     return;
   }
@@ -136,7 +190,7 @@ export async function handleRoute(
       return;
     }
     const job = await ctx.store.getJob(jobId);
-    if (!job) {
+    if (!job || job.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
@@ -157,7 +211,7 @@ export async function handleRoute(
   if (method === 'GET' && pathname.startsWith('/jobs/')) {
     const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
     const job = await ctx.store.getJob(jobId);
-    if (!job) {
+    if (!job || job.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
@@ -167,7 +221,7 @@ export async function handleRoute(
 
   if (method === 'POST' && pathname === '/jobs') {
     const body = await readJsonBody(req);
-    const job = coerceJobDocument(body);
+    const job = coerceJobDocument(body, user.userId);
     await ctx.store.upsertJob(job);
     await bumpJobsGeneration(ctx.store);
     sendJson(res, 201, job);
@@ -177,13 +231,17 @@ export async function handleRoute(
   if (method === 'PATCH' && pathname.startsWith('/jobs/')) {
     const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
     const existing = await ctx.store.getJob(jobId);
-    if (!existing) {
+    if (!existing || existing.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
     const body = await readJsonBody(req);
     const patch = isObject(body) ? body : {};
-    const merged = coerceJobDocument({ ...existing, ...patch, id: jobId }, existing);
+    const merged = coerceJobDocument(
+      { ...existing, ...patch, id: jobId },
+      existing.userId,
+      existing,
+    );
     await ctx.store.upsertJob(merged);
     await bumpJobsGeneration(ctx.store);
     sendJson(res, 200, merged);
@@ -193,7 +251,7 @@ export async function handleRoute(
   if (method === 'DELETE' && pathname.startsWith('/jobs/')) {
     const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
     const existing = await ctx.store.getJob(jobId);
-    if (!existing) {
+    if (!existing || existing.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }

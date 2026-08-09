@@ -1,4 +1,4 @@
-import { getApiBaseUrl, getApiToken } from './auth-token';
+import { clearAccessToken, getAccessToken, getApiBaseUrl } from './auth-token';
 
 export class ApiClientError extends Error {
   readonly kind: 'network' | 'http';
@@ -12,20 +12,32 @@ export class ApiClientError extends Error {
   }
 }
 
+function isLoginRequest(path: string): boolean {
+  return path === '/auth/login' || path.endsWith('/auth/login');
+}
+
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const base = getApiBaseUrl();
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const url = `${base}${normalizedPath}`;
 
   const headers = new Headers(init.headers);
-  const token = getApiToken();
+  const token = getAccessToken();
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  let response: Response;
   try {
-    return await fetch(url, { ...init, headers });
+    response = await fetch(url, { ...init, headers });
   } catch {
     throw new ApiClientError('Cannot reach API', 'network');
   }
+
+  if (response.status === 401 && !isLoginRequest(normalizedPath)) {
+    clearAccessToken();
+    window.location.assign('/login');
+  }
+
+  return response;
 }

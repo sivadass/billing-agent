@@ -52,6 +52,17 @@ function requireBoolean(value: unknown, name: string): boolean {
   return value;
 }
 
+/** Owner userId is optional in seed JSON; unset/empty means orphaned until `migrate-job-owners` assigns it. */
+function optionalOwnerString(value: unknown, name: string): string {
+  if (value === undefined) {
+    return '';
+  }
+  if (typeof value !== 'string') {
+    throw new ConfigError(`${name} must be a string`);
+  }
+  return value;
+}
+
 function resolveEnv(env: NodeJS.ProcessEnv, envName: unknown, field: string): string {
   const name = requireString(envName, field);
   const value = env[name];
@@ -144,6 +155,7 @@ function parseJob(value: unknown, index: number): JobConfig {
   const notify = requireObject(job.notify, `jobs[${index}].notify`);
   return {
     id: requireString(job.id, `jobs[${index}].id`),
+    userId: optionalOwnerString(job.userId, `jobs[${index}].userId`),
     provider: requireString(job.provider, `jobs[${index}].provider`),
     enabled: requireBoolean(job.enabled, `jobs[${index}].enabled`),
     schedule,

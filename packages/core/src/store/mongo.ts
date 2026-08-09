@@ -7,6 +7,7 @@ import type {
   OverlaySuccessInput,
   RunDocument,
   SettingsDocument,
+  UserDocument,
 } from './types.js';
 
 const SETTINGS_ID: SettingsDocument['id'] = 'default';
@@ -35,6 +36,7 @@ type StoreCollections = {
   settings: CollectionLike<SettingsDocument>;
   overlays: CollectionLike<OverlayDocument>;
   runs: CollectionLike<RunDocument>;
+  users: CollectionLike<UserDocument>;
 };
 
 function nowIso(): string {
@@ -54,8 +56,10 @@ export function createBillingStoreFromCollections(
       return settings;
     },
 
-    async listJobs() {
-      const jobs = await collections.jobs.find({}).toArray();
+    async listJobs(options) {
+      const jobs = await collections.jobs
+        .find(options?.userId ? { userId: options.userId } : {})
+        .toArray();
       return jobs.sort((a, b) => a.id.localeCompare(b.id));
     },
 
@@ -162,7 +166,10 @@ export function createBillingStoreFromCollections(
 
     async listRuns(options) {
       const runs = await collections.runs
-        .find(options?.jobId ? { jobId: options.jobId } : {})
+        .find({
+          ...(options?.userId ? { userId: options.userId } : {}),
+          ...(options?.jobId ? { jobId: options.jobId } : {}),
+        })
         .toArray();
       const sorted = runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
       if (options?.limit && options.limit > 0) {
@@ -175,6 +182,14 @@ export function createBillingStoreFromCollections(
       return collections.runs.findOne({ id });
     },
 
+    async findUserByEmail(email) {
+      return collections.users.findOne({ email: email.toLowerCase() });
+    },
+
+    async getUser(id) {
+      return collections.users.findOne({ id });
+    },
+
     async close() {
       await close();
     },
@@ -185,12 +200,15 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   const client = new MongoClient(uri);
   await client.connect();
   const db = client.db();
+  const users = db.collection<UserDocument>('users');
+  await users.createIndex({ email: 1 }, { unique: true });
   return createBillingStoreFromCollections(
     {
       jobs: db.collection<JobDocument>('jobs'),
       settings: db.collection<SettingsDocument>('settings'),
       overlays: db.collection<OverlayDocument>('learned_overlays'),
       runs: db.collection<RunDocument>('runs'),
+      users,
     },
     async () => {
       await client.close();

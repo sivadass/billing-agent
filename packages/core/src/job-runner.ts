@@ -211,6 +211,7 @@ export async function runJob(
     await runnerDeps.store.createRun({
       id: runId,
       jobId: job.id,
+      userId: job.userId,
       provider: job.provider,
       status: 'running',
       startedAt: new Date(startedAt).toISOString(),

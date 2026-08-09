@@ -5,7 +5,7 @@ import { handleRoute } from './routes.js';
 
 export type StartServerInput = {
   port: number;
-  token: string;
+  jwtSecret: string;
   store: BillingStore;
   corsOrigins?: string[];
   onRunJob?: (jobId: string) => Promise<string>;
@@ -24,7 +24,7 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
     if (handled) return;
 
     void handleRoute(req, res, {
-      token: input.token,
+      jwtSecret: input.jwtSecret,
       store: input.store,
       onRunJob: input.onRunJob,
     }).catch(

@@ -5,6 +5,7 @@ import {
   AppError,
   ConfigError,
   connectStore,
+  hashPassword,
   loadConfigFromStore,
   loadSeedConfig,
   registerBuiltInAdapters,
@@ -49,12 +50,12 @@ function requireMongoUri(env: NodeJS.ProcessEnv = process.env): string {
   return uri;
 }
 
-function requireApiToken(env: NodeJS.ProcessEnv = process.env): string {
-  const token = env.API_TOKEN;
-  if (!token) {
-    throw new ConfigError('Missing environment variable: API_TOKEN');
+function requireJwtSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const secret = env.JWT_SECRET;
+  if (!secret) {
+    throw new ConfigError('Missing environment variable: JWT_SECRET');
   }
-  return token;
+  return secret;
 }
 
 function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): number {
@@ -97,7 +98,7 @@ program
     const app = await loadConfigFromStore(store);
     const server = await startServer({
       port: resolveHttpPort(),
-      token: requireApiToken(),
+      jwtSecret: requireJwtSecret(),
       store,
       corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
       onRunJob: async (jobId: string) => {
@@ -149,6 +150,49 @@ program
         for (const job of seed.jobs) {
           await store.upsertJob(job);
         }
+      } finally {
+        await store.close();
+      }
+    }),
+  );
+
+program
+  .command('hash-password')
+  .argument('<password>')
+  .action(async (password: string) => {
+    const hash = await hashPassword(password);
+    process.stdout.write(`${hash}\n`);
+  });
+
+program
+  .command('migrate-job-owners')
+  .requiredOption('--email <email>', 'email of the user to own orphaned jobs/runs')
+  .action(
+    withErrorHandling(async (options: { email: string }) => {
+      const store = await connectStore(requireMongoUri());
+      try {
+        const user = await store.findUserByEmail(options.email);
+        if (!user) {
+          console.error(`No user found for email: ${options.email}`);
+          process.exitCode = 1;
+          return;
+        }
+
+        const jobs = await store.listJobs();
+        const orphanJobs = jobs.filter((job) => !job.userId);
+        for (const job of orphanJobs) {
+          await store.upsertJob({ ...job, userId: user.id });
+        }
+
+        const runs = await store.listRuns();
+        const orphanRuns = runs.filter((run) => !run.userId);
+        for (const run of orphanRuns) {
+          await store.finishRun(run.id, { userId: user.id });
+        }
+
+        console.log(
+          `Assigned ${orphanJobs.length} job(s) and ${orphanRuns.length} run(s) to ${user.email}`,
+        );
       } finally {
         await store.close();
       }

@@ -9,7 +9,8 @@
     "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
-    "@billing-agent/core": "*"
+    "@billing-agent/core": "*",
+    "jose": "^6.2.8"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

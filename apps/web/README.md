@@ -6,16 +6,17 @@ React (Vite) UI for the billing-agent HTTP API. Uses Cleanplate + SCSS modules.
 
 The app is organized into hubs under a router shell:
 
+- `/login` - public email/password login (JWT stored in `sessionStorage`)
 - `/jobs` - list jobs, run now, edit, soft-disable/enable
 - `/jobs/new` - create job
 - `/jobs/:jobId` - edit job
 - `/runs` - list/filter runs
 - `/runs/:runId` - run detail with polling while status is `running`
 - `/status` - API health/auth probes
-- `/settings` - API token session override (TokenGate)
 
 Notes:
 
+- All hubs except `/login` require a JWT (protected layout + Log out in the header).
 - Schedules are shown in humanized form in tables, but edited as raw cron in forms.
 - Empty schedule means manual-only (`null` in API payloads).
 - Job disable is soft-disable only (`DELETE /jobs/:id` sets `enabled: false`).
@@ -30,6 +31,7 @@ Notes:
 ```bash
 # in repo root .env
 CORS_ORIGINS=http://localhost:5173
+JWT_SECRET=replace-with-strong-random-secret
 ```
 
 2. Configure the web app:
@@ -37,8 +39,9 @@ CORS_ORIGINS=http://localhost:5173
 ```bash
 cp apps/web/.env.example apps/web/.env
 # set VITE_API_BASE_URL=http://127.0.0.1:8080
-# optional: VITE_API_TOKEN=<same as API_TOKEN>
 ```
+
+Provision a user in Mongo (see root `README.md`: `hash-password` + Atlas insert), then sign in at `/login`.
 
 3. Start Vite:
 
@@ -46,7 +49,7 @@ cp apps/web/.env.example apps/web/.env
 npm run dev:web
 ```
 
-Open the printed local URL. Without `VITE_API_TOKEN`, open **Settings** and use the token form (session override).
+Open the printed local URL. Unauthenticated visits to hubs redirect to `/login`.
 
 ## Vercel
 
@@ -54,7 +57,7 @@ Create a Vercel project linked to this repo:
 
 - Root Directory: `apps/web`
 - Config file: `vercel.json` (install from monorepo root with `--ignore-scripts`, build `dist`, SPA rewrite)
-- Env: `VITE_API_BASE_URL` (required), `VITE_API_TOKEN` (optional)
+- Env: `VITE_API_BASE_URL` (required)
 - On the API host, set `CORS_ORIGINS` to include the Vercel production origin (and preview origins if needed), e.g. `https://your-app.vercel.app`
 
 ## Scripts

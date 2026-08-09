@@ -11,6 +11,7 @@ import { runJob, runJobs } from '../src/job-runner.ts';
 
 const job: JobConfig = {
   id: 'fake-job',
+  userId: 'user-1',
   provider: 'fake',
   enabled: true,
   schedule: null,
@@ -78,6 +79,39 @@ describe('runJob', () => {
 
     assert.equal(created.length, 1);
     assert.equal(created[0], runs[0]?.id);
+  });
+
+  it('stamps the run with the job owner userId', async () => {
+    const runs: RunDocument[] = [];
+    const store = {
+      async createRun(run: RunDocument) {
+        runs.push(run);
+      },
+      async finishRun() {},
+      async listActiveOverlays() {
+        return [];
+      },
+    } as unknown as BillingStore;
+
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    await runJob(app, job, {
+      env: testEnv,
+      store,
+      getAdapter: () => adapter,
+      withBrowser: async (_browser, fn) => fn({} as Page),
+      sendNtfy: async () => {},
+      proposeOverlayPatch: async () => {
+        throw new ConfigError('unused');
+      },
+    });
+
+    assert.equal(runs[0]?.userId, job.userId);
   });
 
   it('attempts one recovery and records overlay success after retry succeeds', async () => {
