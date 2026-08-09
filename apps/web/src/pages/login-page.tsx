@@ -40,11 +40,18 @@ export function LoginPage() {
   return (
     <div className={styles['login-page']}>
       <Container className={styles.card} padding="5" showBorder>
-        <Typography variant="h2" margin="b-2">
+        <img
+          className={styles.logo}
+          src="/billing-agent-logo.svg"
+          alt="Billing Agent"
+          width={159}
+          height={32}
+        />
+        <Typography variant="h2" margin="b-2" className={styles.title}>
           Sign in
         </Typography>
-        <Typography variant="p" margin="b-4" className={styles.muted}>
-          Use your billing-agent account email and password.
+        <Typography variant="p" margin="b-4" className={styles.support}>
+          Use your account email and password to continue.
         </Typography>
         <form onSubmit={(event) => void onSubmit(event)}>
           <FormControls.Input

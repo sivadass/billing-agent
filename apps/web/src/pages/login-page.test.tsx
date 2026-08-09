@@ -37,6 +37,9 @@ describe('LoginPage', () => {
       </MemoryRouter>,
     );
 
+    expect(screen.getByRole('img', { name: /billing agent/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /sign in/i })).toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: 'you@example.com' },
     });

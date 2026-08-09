@@ -1,17 +1,44 @@
 .login-page {
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
-  background: linear-gradient(160deg, var(--gray-10) 0%, var(--gray-20) 100%);
+  background:
+    radial-gradient(
+      ellipse 80% 55% at 50% -10%,
+      color-mix(in srgb, var(--billing-secondary) 28%, transparent),
+      transparent 70%
+    ),
+    linear-gradient(
+      165deg,
+      var(--billing-primary-soft) 0%,
+      var(--billing-secondary-soft) 55%,
+      var(--gray-50) 100%
+    );
 }
 
 .card {
   width: min(100%, 26rem);
   background: var(--white);
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--billing-primary) 8%, transparent);
 }
 
-.muted {
+.logo {
+  display: block;
+  width: min(100%, 11.5rem);
+  height: auto;
+  margin: 0 auto var(--space-5);
+}
+
+.title {
+  color: var(--text-default);
+  text-align: center;
+}
+
+.support {
   color: var(--text-muted);
+  text-align: center;
 }
