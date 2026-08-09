@@ -808,9 +808,9 @@ git commit -m "feat(web): implement Jobs hub table and actions"
 - Consumes: `getJob`, `createJob`, `updateJob`
 - Produces: Form for `/jobs/new` and `/jobs/:jobId`
 
-- [ ] **Step 1: Failing test** — create submits `POST` payload with `credentialsEnv` and empty schedule → `null`
+- [x] **Step 1: Failing test** — create submits `POST` payload with `credentialsEnv` and empty schedule → `null`
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Fields via `FormControls`:
 
@@ -823,7 +823,7 @@ Fields via `FormControls`:
 
 On save success → `navigate('/jobs')`. Show inline `error` props on invalid required fields.
 
-- [ ] **Step 3: Tests PASS + commit**
+- [x] **Step 3: Tests PASS + commit**
 
 ```bash
 git add apps/web/src/components/credentials-env-editor.tsx apps/web/src/pages/job-form-page.tsx apps/web/src/pages/job-form-page.test.tsx
