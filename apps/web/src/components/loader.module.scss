@@ -1,0 +1,52 @@
+@keyframes top-loop {
+  0%,
+  8%,
+  92%,
+  to {
+    opacity: 0;
+    transform: translate(5.25px, -4.25px) scale(0.92);
+  }
+  24%,
+  78% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1.02);
+  }
+  34%,
+  68% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@keyframes bottom-loop {
+  0%,
+  8%,
+  92%,
+  to {
+    opacity: 0;
+    transform: translate(-5.25px, 4.25px) scale(0.92);
+  }
+  24%,
+  78% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1.02);
+  }
+  34%,
+  68% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+.logo {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.top {
+  animation: top-loop 2.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.bottom {
+  animation: bottom-loop 2.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
