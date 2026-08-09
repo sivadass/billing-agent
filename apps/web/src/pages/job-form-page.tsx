@@ -1,12 +1,14 @@
-import { Alert, Button, Container, FormControls, PageHeader, Spinner } from 'cleanplate';
+import { Alert, Button, Container, FormControls, PageHeader } from 'cleanplate';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   type CredentialEnvRow,
   CredentialsEnvEditor,
 } from '../components/credentials-env-editor';
+import { Loader } from '../components/loader';
 import { createJob, getJob, updateJob } from '../lib/jobs-api';
 import type { JobDocument } from '../lib/types';
+import styles from './job-form-page.module.scss';
 
 const PROVIDER_OPTIONS = [
   { label: 'tnpdcl', value: 'tnpdcl' },
@@ -119,7 +121,9 @@ export function JobFormPage() {
       <PageHeader title={title} subtitle="Configure the billing job settings." />
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
       {isLoading ? (
-        <Spinner margin="t-3" />
+        <div className={styles['loading-state']}>
+          <Loader size={56} />
+        </div>
       ) : (
         <Container padding="0" margin="t-3">
           <FormControls.Input

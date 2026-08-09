@@ -1,6 +1,7 @@
-import { Alert, FormControls, PageHeader, Spinner } from 'cleanplate';
+import { Alert, FormControls, PageHeader } from 'cleanplate';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Loader } from '../components/loader';
 import { RunsTable } from '../components/runs-table';
 import { listJobs } from '../lib/jobs-api';
 import { listRuns } from '../lib/runs-api';
@@ -105,7 +106,11 @@ export function RunsPage() {
         </div>
       </div>
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
-      {isLoading ? <Spinner margin="t-3" /> : null}
+      {isLoading ? (
+        <div className={styles['loading-state']}>
+          <Loader size={56} />
+        </div>
+      ) : null}
       {!isLoading && !error ? (
         <RunsTable
           runs={filteredRuns}

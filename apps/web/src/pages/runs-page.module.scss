@@ -10,6 +10,14 @@
   min-width: 0;
 }
 
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 16rem;
+  margin-top: var(--space-3);
+}
+
 @media (min-width: 768px) {
   .filters {
     flex-direction: row;

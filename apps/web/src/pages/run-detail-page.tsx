@@ -7,11 +7,11 @@ import {
   FeedbackState,
   Icon,
   PageHeader,
-  Spinner,
   Typography,
 } from 'cleanplate';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { Loader } from '../components/loader';
 import { getRun } from '../lib/runs-api';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
 import type { RunDocument } from '../lib/types';
@@ -159,9 +159,9 @@ export function RunDetailPage() {
       {error ? <Alert variant="error" margin="t-4" message={error} /> : null}
 
       {isLoading && !run ? (
-        <Container display="flex" justify="center" padding="6" margin="t-5">
-          <Spinner />
-        </Container>
+        <div className={styles['loading-state']}>
+          <Loader size={56} />
+        </div>
       ) : null}
 
       {!isLoading && !run && !error ? (
@@ -201,7 +201,7 @@ export function RunDetailPage() {
                 </Container>
               </div>
             </Container>
-            {run.status === 'running' ? <Spinner size="small" /> : null}
+            {run.status === 'running' ? <Loader size={20} /> : null}
           </Container>
 
           <Container className={styles['metrics-row']} display="flex" gap="3" padding="0">
