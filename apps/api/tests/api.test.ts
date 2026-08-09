@@ -162,20 +162,20 @@ describe('api CORS', () => {
       port: 0,
       token: 'secret-token',
       store: new MemoryStore(),
-      corsOrigins: ['https://app.netlify.app'],
+      corsOrigins: ['https://app.vercel.app'],
     });
     handles.push(handle);
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
       method: 'OPTIONS',
       headers: {
-        Origin: 'https://app.netlify.app',
+        Origin: 'https://app.vercel.app',
         'Access-Control-Request-Method': 'GET',
         'Access-Control-Request-Headers': 'authorization',
       },
     });
     assert.equal(response.status, 204);
-    assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.netlify.app');
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.vercel.app');
     assert.match(response.headers.get('access-control-allow-methods') ?? '', /GET/);
   });
 

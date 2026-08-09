@@ -163,7 +163,7 @@ node apps/worker/dist/cli.js seed-jobs --from jobs.coolify.json
 
 ## Web UI (`apps/web`)
 
-Vite + React + Cleanplate SPA hosted on Netlify. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override).
+Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VITE_API_BASE_URL` and Bearer token (`VITE_API_TOKEN` or session override).
 
 ```bash
 npm run dev:web
@@ -172,7 +172,7 @@ npm run dev:web
 On the API host, allow browser origins:
 
 ```bash
-CORS_ORIGINS=http://localhost:5173,https://your-app.netlify.app
+CORS_ORIGINS=http://localhost:5173,https://your-app.vercel.app
 ```
 
-See `apps/web/README.md` for Netlify settings.
+See `apps/web/README.md` for Vercel settings.

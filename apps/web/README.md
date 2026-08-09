@@ -27,12 +27,14 @@ npm run dev:web
 
 Open the printed local URL. Without `VITE_API_TOKEN`, use the TokenGate form (session override).
 
-## Netlify
+## Vercel
 
-- Base directory: `apps/web`
-- Build: `npm run build` -> publish `dist`
+Create a Vercel project linked to this repo:
+
+- Root Directory: `apps/web`
+- Config file: `vercel.json` (install from monorepo root with `--ignore-scripts`, build `dist`, SPA rewrite)
 - Env: `VITE_API_BASE_URL` (required), `VITE_API_TOKEN` (optional)
-- On the API host, set `CORS_ORIGINS` to include the Netlify site origin (and preview origins if needed)
+- On the API host, set `CORS_ORIGINS` to include the Vercel production origin (and preview origins if needed), e.g. `https://your-app.vercel.app`
 
 ## Scripts
 
