@@ -37,8 +37,10 @@ CORS_ORIGINS=http://localhost:5173
 ```bash
 cp apps/web/.env.example apps/web/.env
 # set VITE_API_BASE_URL=http://127.0.0.1:8080
-# optional: VITE_API_TOKEN=<same as API_TOKEN>
+# optional: VITE_API_TOKEN=<a bearer token for the Settings session override>
 ```
+
+The worker API now authenticates with per-user JWTs (`JWT_SECRET`, not a shared `API_TOKEN`); see the root `README.md` for provisioning a user and logging in.
 
 3. Start Vite:
 

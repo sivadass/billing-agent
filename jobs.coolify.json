@@ -17,6 +17,7 @@
   "jobs": [
     {
       "id": "home-eb",
+      "userId": "",
       "provider": "tnpdcl",
       "enabled": true,
       "schedule": "0 9 * * *",
@@ -28,6 +29,7 @@
     },
     {
       "id": "smoke-test",
+      "userId": "",
       "provider": "dummy",
       "enabled": false,
       "schedule": null,
