@@ -394,7 +394,7 @@ git commit -m "feat(api): add POST /jobs/:id/run trigger endpoint"
 - Consumes: `runJob`, `loadConfigFromStore`, `onRunCreated`, `startServer({ onRunJob })`
 - Produces: Daemon `onRunJob(jobId)` that returns `runId` after create, while scrape continues
 
-- [ ] **Step 1: Implement daemon `onRunJob`**
+- [x] **Step 1: Implement daemon `onRunJob`**
 
 In the `daemon` action, import `runJob` from `@billing-agent/core` (in addition to existing imports). Replace `startServer` call with:
 
@@ -436,13 +436,13 @@ In the `daemon` action, import `runJob` from `@billing-agent/core` (in addition 
 
 Keep `startDaemon(app, { store })` as today (scheduler uses initial `app`; generation bumps already reload via store — do not change scheduler in this task unless required for compile).
 
-- [ ] **Step 2: Typecheck worker**
+- [x] **Step 2: Typecheck worker**
 
 Run: `npm run build -w @billing-agent/worker` (or the workspace’s equivalent `tsc` script)
 
 Expected: PASS / emit succeeds.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add apps/worker/src/cli.ts

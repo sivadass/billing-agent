@@ -8,6 +8,7 @@ import {
   loadConfigFromStore,
   loadSeedConfig,
   registerBuiltInAdapters,
+  runJob,
   runJobs,
 } from '@billing-agent/core';
 import { parseCorsOrigins, startServer } from '@billing-agent/api';
@@ -99,6 +100,33 @@ program
       token: requireApiToken(),
       store,
       corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
+      onRunJob: async (jobId: string) => {
+        const latest = await loadConfigFromStore(store);
+        const job = latest.jobs.find((item) => item.id === jobId);
+        if (!job) {
+          throw new ConfigError(`Unknown job id: ${jobId}`);
+        }
+
+        return await new Promise<string>((resolve, reject) => {
+          let reported = false;
+          void runJob(latest, job, {
+            store,
+            onRunCreated: (runId) => {
+              reported = true;
+              resolve(runId);
+            },
+          }).catch((error: unknown) => {
+            if (!reported) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+              return;
+            }
+            console.error(
+              `[daemon] run for ${jobId} failed after start:`,
+              error instanceof Error ? error.message : error,
+            );
+          });
+        });
+      },
     });
 
     try {
