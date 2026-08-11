@@ -5,9 +5,11 @@ import { hashPassword } from '@billing-agent/core';
 import type {
   BillingStore,
   JobDocument,
+  PriceCheckDocument,
   RunDocument,
   SettingsDocument,
   UserDocument,
+  WatchDocument,
 } from '@billing-agent/core';
 import { startServer } from '../src/server.ts';
 
@@ -20,9 +22,12 @@ class MemoryStore implements BillingStore {
     mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
     browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
     jobsGeneration: 0,
+    watchesGeneration: 0,
   };
 
   jobs = new Map<string, JobDocument>();
+  watches = new Map<string, WatchDocument>();
+  priceChecks = new Map<string, PriceCheckDocument>();
   runs = new Map<string, RunDocument>();
   users = new Map<string, UserDocument>();
 
@@ -48,6 +53,57 @@ class MemoryStore implements BillingStore {
 
   async upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void> {
     this.settings = { id: 'default', ...settings };
+  }
+
+  async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {
+    let watches = [...this.watches.values()];
+    if (options?.userId) {
+      watches = watches.filter((watch) => watch.userId === options.userId);
+    }
+    return watches;
+  }
+
+  async getWatch(id: string): Promise<WatchDocument | null> {
+    return this.watches.get(id) ?? null;
+  }
+
+  async upsertWatch(watch: WatchDocument): Promise<void> {
+    this.watches.set(watch.id, watch);
+  }
+
+  async deleteWatch(id: string): Promise<void> {
+    this.watches.delete(id);
+    for (const [checkId, check] of this.priceChecks.entries()) {
+      if (check.watchId === id) {
+        this.priceChecks.delete(checkId);
+      }
+    }
+  }
+
+  async createPriceCheck(check: PriceCheckDocument): Promise<void> {
+    this.priceChecks.set(check.id, check);
+  }
+
+  async finishPriceCheck(id: string, update: Partial<PriceCheckDocument>): Promise<void> {
+    const current = this.priceChecks.get(id);
+    if (!current) return;
+    this.priceChecks.set(id, { ...current, ...update });
+  }
+
+  async listPriceChecks(options: {
+    watchId: string;
+    userId?: string;
+    limit?: number;
+  }): Promise<PriceCheckDocument[]> {
+    let checks = [...this.priceChecks.values()].filter((check) => check.watchId === options.watchId);
+    if (options.userId) {
+      checks = checks.filter((check) => check.userId === options.userId);
+    }
+    checks.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
+    if (options.limit && options.limit > 0) {
+      return checks.slice(0, options.limit);
+    }
+    return checks;
   }
 
   async listActiveOverlays(): Promise<[]> {

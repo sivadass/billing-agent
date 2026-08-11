@@ -82,6 +82,7 @@ async function bumpJobsGeneration(store: BillingStore): Promise<void> {
   const updated: Omit<SettingsDocument, 'id'> = {
     ...withoutId,
     jobsGeneration: settings.jobsGeneration + 1,
+    watchesGeneration: settings.watchesGeneration ?? 0,
   };
   await store.upsertSettings(updated);
 }
