@@ -23,3 +23,33 @@ export type RunDocument = {
   overlayActivated: boolean;
   billSummary: Record<string, string> | null;
 };
+
+export type PriceSource = 'shopify_json' | 'json_ld' | 'og' | 'selector' | 'llm';
+
+export type WatchDocument = {
+  id: string;
+  userId?: string;
+  url: string;
+  title: string | null;
+  enabled: boolean;
+  schedule: string | null;
+  lastPrice: number | null;
+  lastCurrency: string | null;
+  lastSource: PriceSource | null;
+  lastCheckedAt: string | null;
+  createdAt: string;
+};
+
+export type PriceCheckDocument = {
+  id: string;
+  watchId: string;
+  userId?: string;
+  status: 'running' | 'success' | 'failed';
+  price: number | null;
+  currency: string | null;
+  source: PriceSource | null;
+  previousPrice: number | null;
+  dropped: boolean | null;
+  error: string | null;
+  checkedAt: string;
+};
