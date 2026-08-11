@@ -11,7 +11,10 @@ import {
   registerBuiltInAdapters,
   runJob,
   runJobs,
+  sendNtfy,
+  withBrowser,
 } from '@billing-agent/core';
+import { runWatch, runWatches } from '@billing-agent/price-monitor';
 import { parseCorsOrigins, startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
 
@@ -67,6 +70,14 @@ function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): number {
   return port;
 }
 
+function browserLoadHtmlFactory(app: Awaited<ReturnType<typeof loadConfigFromStore>>) {
+  return async (url: string): Promise<string> =>
+    withBrowser(app.browser, async (page) => {
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      return page.content();
+    });
+}
+
 program
   .command('run')
   .option('--job <id>', 'run a single job id')
@@ -90,6 +101,63 @@ program
       }
     }),
   );
+
+program
+  .command('run-watch')
+  .requiredOption('--id <id>', 'run a single watch id')
+  .action(
+    withErrorHandling(async (options: { id: string }) => {
+      const store = await connectStore(requireMongoUri());
+      try {
+        const app = await loadConfigFromStore(store);
+        const watch = await store.getWatch(options.id);
+        if (!watch) {
+          throw new ConfigError(`Unknown watch id: ${options.id}`);
+        }
+        const check = await runWatch({
+          watch,
+          store,
+          sendNtfy,
+          ntfy: {
+            baseUrl: app.ntfy.baseUrl,
+            topic: app.ntfy.topic,
+            priority: app.ntfy.priority,
+          },
+          browserLoadHtml: browserLoadHtmlFactory(app),
+          mistralApiKey: process.env[app.mistral.apiKeyEnv],
+          mistralModel: app.mistral.model,
+        });
+        process.exitCode = check.status === 'failed' ? 1 : 0;
+      } finally {
+        await store.close();
+      }
+    }),
+  );
+
+program
+  .command('run-watches')
+  .action(withErrorHandling(async () => {
+    const store = await connectStore(requireMongoUri());
+    try {
+      const app = await loadConfigFromStore(store);
+      const checks = await runWatches({
+        watches: await store.listWatches(),
+        store,
+        sendNtfy,
+        ntfy: {
+          baseUrl: app.ntfy.baseUrl,
+          topic: app.ntfy.topic,
+          priority: app.ntfy.priority,
+        },
+        browserLoadHtml: browserLoadHtmlFactory(app),
+        mistralApiKey: process.env[app.mistral.apiKeyEnv],
+        mistralModel: app.mistral.model,
+      });
+      process.exitCode = checks.some((check) => check.status === 'failed') ? 1 : 0;
+    } finally {
+      await store.close();
+    }
+  }));
 
 program
   .command('daemon')
