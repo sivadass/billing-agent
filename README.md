@@ -16,6 +16,7 @@ apps/
   worker/    # @billing-agent/worker (CLI + scheduler daemon)
 packages/
   core/      # @billing-agent/core (adapters, config, runner, recovery, store)
+  price-monitor/ # @billing-agent/price-monitor (price extraction, compare, watch runner)
 ```
 
 ## Requirements
@@ -108,6 +109,12 @@ npm run dev -w @billing-agent/worker -- run --job smoke-test
 # Run all enabled jobs once
 npm run dev -w @billing-agent/worker -- run --all
 
+# Run one watch immediately
+npm run dev -w @billing-agent/worker -- run-watch --id craft-glory-old-skool-vb
+
+# Run all enabled watches once
+npm run dev -w @billing-agent/worker -- run-watches
+
 # Long-running daemon: scheduler + embedded HTTP API
 npm run start
 ```
@@ -128,6 +135,13 @@ Base URL: `http://localhost:${HTTP_PORT:-8080}`
 - `POST /jobs/:id/run` (manual trigger, returns `202 { id }`)
 - `PATCH /jobs/:id`
 - `DELETE /jobs/:id` (soft-disable via `enabled: false`)
+- `GET /watches`
+- `POST /watches`
+- `GET /watches/:id`
+- `PATCH /watches/:id`
+- `DELETE /watches/:id` (hard delete + cascades `price_checks`)
+- `POST /watches/:id/check` (manual trigger, returns `202 { id }`, `409` if running)
+- `GET /watches/:id/checks`
 
 `/jobs` and `/runs` routes are scoped to the authenticated user; accessing another user's job/run returns `404`.
 
@@ -172,6 +186,16 @@ Collection variables:
 
 The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
 
+## Price monitor notes
+
+- Default watch schedule: `0 9 * * *` with cron timezone `Asia/Kolkata` (IST).
+- Alert rule (v1): notify only when the new price is lower than the previous successful price **and** currency/source match.
+- First successful check creates the baseline and does not notify.
+- Currency/source changes reset the baseline (no notify).
+- Non-positive extracted prices are treated as failed checks (no baseline update, no notify).
+- SSRF protection blocks obvious local/private/link-local/metadata targets before Shopify fetch and browser navigation.
+- Residual risk accepted in v1: DNS rebinding after validation is not mitigated.
+
 ## Overlay learning behavior
 
 - Only recoverable errors are eligible: `LoginError`, `ScrapeError`, `TimeoutError`.
@@ -211,6 +235,7 @@ Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VIT
 
 - `/login` (public)
 - `/jobs`, `/jobs/new`, `/jobs/:jobId`
+- `/watches`, `/watches/new`, `/watches/:watchId/edit`, `/watches/:watchId`
 - `/runs`, `/runs/:runId` (polls run detail while running)
 - `/status`
 
