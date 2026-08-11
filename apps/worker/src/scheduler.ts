@@ -8,9 +8,17 @@ import {
   type Logger,
 } from '@billing-agent/core';
 
+type CronScheduleOptions = {
+  timezone: string;
+};
+
 type CronScheduler = {
   validate(expression: string): boolean;
-  schedule(expression: string, task: () => void): {
+  schedule(
+    expression: string,
+    task: () => void,
+    options?: CronScheduleOptions,
+  ): {
     stop?: () => void;
     destroy?: () => void;
   };
@@ -61,20 +69,25 @@ export async function startDaemon(
         );
       }
 
-      const task = schedulerDeps.cron.schedule(job.schedule, () => {
-        void schedulerDeps
-          .runJobs(activeApp, [job.id], schedulerDeps.store ? { store: schedulerDeps.store } : {})
-          .catch((error: unknown) => {
-            schedulerDeps.logger.error('scheduled job failed', {
-              jobId: job.id,
-              error: String(error),
+      const task = schedulerDeps.cron.schedule(
+        job.schedule,
+        () => {
+          void schedulerDeps
+            .runJobs(activeApp, [job.id], schedulerDeps.store ? { store: schedulerDeps.store } : {})
+            .catch((error: unknown) => {
+              schedulerDeps.logger.error('scheduled job failed', {
+                jobId: job.id,
+                error: String(error),
+              });
             });
-          });
-      });
+        },
+        { timezone: 'Asia/Kolkata' },
+      );
       tasks.push(task);
       schedulerDeps.logger.info('scheduled job', {
         jobId: job.id,
         schedule: job.schedule,
+        timezone: 'Asia/Kolkata',
       });
     }
     return tasks;
