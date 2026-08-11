@@ -196,6 +196,43 @@ program
           });
         });
       },
+      onRunWatch: async (watchId: string) => {
+        const latest = await loadConfigFromStore(store);
+        const watch = await store.getWatch(watchId);
+        if (!watch) {
+          throw new ConfigError(`Unknown watch id: ${watchId}`);
+        }
+
+        return await new Promise<string>((resolve, reject) => {
+          let reported = false;
+          void runWatch({
+            watch,
+            store,
+            sendNtfy,
+            ntfy: {
+              baseUrl: latest.ntfy.baseUrl,
+              topic: latest.ntfy.topic,
+              priority: latest.ntfy.priority,
+            },
+            browserLoadHtml: browserLoadHtmlFactory(latest),
+            mistralApiKey: process.env[latest.mistral.apiKeyEnv],
+            mistralModel: latest.mistral.model,
+            onCheckCreated: (checkId) => {
+              reported = true;
+              resolve(checkId);
+            },
+          }).catch((error: unknown) => {
+            if (!reported) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+              return;
+            }
+            console.error(
+              `[daemon] watch run for ${watchId} failed after start:`,
+              error instanceof Error ? error.message : error,
+            );
+          });
+        });
+      },
     });
 
     try {

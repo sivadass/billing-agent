@@ -9,6 +9,7 @@ export type StartServerInput = {
   store: BillingStore;
   corsOrigins?: string[];
   onRunJob?: (jobId: string) => Promise<string>;
+  onRunWatch?: (watchId: string) => Promise<string>;
 };
 
 export type ApiServerHandle = {
@@ -27,6 +28,7 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
       jwtSecret: input.jwtSecret,
       store: input.store,
       onRunJob: input.onRunJob,
+      onRunWatch: input.onRunWatch,
     }).catch(
       (error: unknown) => {
         res.statusCode = 500;

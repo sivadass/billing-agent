@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@billing-agent/core": "*",
+    "@billing-agent/price-monitor": "*",
     "jose": "^6.2.8"
   },
   "devDependencies": {
