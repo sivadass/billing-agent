@@ -127,6 +127,13 @@ describe('runJob', () => {
       getJob: async () => null,
       upsertJob: async () => {},
       upsertSettings: async () => {},
+      listWatches: async () => [],
+      getWatch: async () => null,
+      upsertWatch: async () => {},
+      deleteWatch: async () => {},
+      createPriceCheck: async () => {},
+      finishPriceCheck: async () => {},
+      listPriceChecks: async () => [],
       listActiveOverlays: async () => [],
       recordOverlaySuccess: async (input) => ({
         provider: input.provider,

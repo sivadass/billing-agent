@@ -223,6 +223,10 @@ export function loadSeedConfig(options?: {
         root.jobsGeneration === undefined
           ? 0
           : requireNumber(root.jobsGeneration, 'jobsGeneration'),
+      watchesGeneration:
+        root.watchesGeneration === undefined
+          ? 0
+          : requireNumber(root.watchesGeneration, 'watchesGeneration'),
     },
     jobs: root.jobs.map((job, index) => parseJob(job, index)),
   };
@@ -275,6 +279,7 @@ export async function loadConfigFromStore(
     mistral: settingsDoc.mistral,
     browser: settingsDoc.browser,
     jobsGeneration: settingsDoc.jobsGeneration,
+    watchesGeneration: settingsDoc.watchesGeneration ?? 0,
   };
   return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env);
 }
