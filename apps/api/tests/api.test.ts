@@ -5,9 +5,11 @@ import { hashPassword } from '@billing-agent/core';
 import type {
   BillingStore,
   JobDocument,
+  PriceCheckDocument,
   RunDocument,
   SettingsDocument,
   UserDocument,
+  WatchDocument,
 } from '@billing-agent/core';
 import { startServer } from '../src/server.ts';
 
@@ -20,9 +22,12 @@ class MemoryStore implements BillingStore {
     mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
     browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
     jobsGeneration: 0,
+    watchesGeneration: 0,
   };
 
   jobs = new Map<string, JobDocument>();
+  watches = new Map<string, WatchDocument>();
+  priceChecks = new Map<string, PriceCheckDocument>();
   runs = new Map<string, RunDocument>();
   users = new Map<string, UserDocument>();
 
@@ -48,6 +53,57 @@ class MemoryStore implements BillingStore {
 
   async upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void> {
     this.settings = { id: 'default', ...settings };
+  }
+
+  async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {
+    let watches = [...this.watches.values()];
+    if (options?.userId) {
+      watches = watches.filter((watch) => watch.userId === options.userId);
+    }
+    return watches;
+  }
+
+  async getWatch(id: string): Promise<WatchDocument | null> {
+    return this.watches.get(id) ?? null;
+  }
+
+  async upsertWatch(watch: WatchDocument): Promise<void> {
+    this.watches.set(watch.id, watch);
+  }
+
+  async deleteWatch(id: string): Promise<void> {
+    this.watches.delete(id);
+    for (const [checkId, check] of this.priceChecks.entries()) {
+      if (check.watchId === id) {
+        this.priceChecks.delete(checkId);
+      }
+    }
+  }
+
+  async createPriceCheck(check: PriceCheckDocument): Promise<void> {
+    this.priceChecks.set(check.id, check);
+  }
+
+  async finishPriceCheck(id: string, update: Partial<PriceCheckDocument>): Promise<void> {
+    const current = this.priceChecks.get(id);
+    if (!current) return;
+    this.priceChecks.set(id, { ...current, ...update });
+  }
+
+  async listPriceChecks(options: {
+    watchId: string;
+    userId?: string;
+    limit?: number;
+  }): Promise<PriceCheckDocument[]> {
+    let checks = [...this.priceChecks.values()].filter((check) => check.watchId === options.watchId);
+    if (options.userId) {
+      checks = checks.filter((check) => check.userId === options.userId);
+    }
+    checks.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
+    if (options.limit && options.limit > 0) {
+      return checks.slice(0, options.limit);
+    }
+    return checks;
   }
 
   async listActiveOverlays(): Promise<[]> {
@@ -145,6 +201,7 @@ afterEach(async () => {
 async function setupAuthedServer(options?: {
   store?: MemoryStore;
   onRunJob?: (jobId: string) => Promise<string>;
+  onRunWatch?: (watchId: string) => Promise<string>;
   corsOrigins?: string[];
 }): Promise<{
   handle: { port: number; close: () => Promise<void> };
@@ -159,6 +216,7 @@ async function setupAuthedServer(options?: {
     jwtSecret: JWT_SECRET,
     store,
     onRunJob: options?.onRunJob,
+    onRunWatch: options?.onRunWatch,
     corsOrigins: options?.corsOrigins,
   });
   handles.push(handle);
@@ -669,5 +727,193 @@ describe('POST /jobs/:id/run', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(response.status, 409);
+  });
+});
+
+describe('watches api', () => {
+  function buildWatchPayload() {
+    return {
+      id: 'watch-home',
+      url: 'https://example.com/products/demo',
+      title: 'Demo watch',
+      enabled: true,
+      schedule: '0 9 * * *',
+    };
+  }
+
+  it('creates a watch and lists it for the owner', async () => {
+    const { handle, user, token } = await setupAuthedServer();
+    const created = await fetch(`http://127.0.0.1:${handle.port}/watches`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ ...buildWatchPayload(), userId: 'spoofed' }),
+    });
+    assert.equal(created.status, 201);
+    const watch = (await created.json()) as WatchDocument;
+    assert.equal(watch.userId, user.id);
+    assert.equal(watch.schedule, '0 9 * * *');
+    assert.equal(watch.lastPrice, null);
+
+    const listed = await fetch(`http://127.0.0.1:${handle.port}/watches`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(listed.status, 200);
+    const watches = (await listed.json()) as WatchDocument[];
+    assert.equal(watches.length, 1);
+    assert.equal(watches[0]?.id, watch.id);
+  });
+
+  it('rejects non-public watch urls with 400', async () => {
+    const { handle, token } = await setupAuthedServer();
+    const response = await fetch(`http://127.0.0.1:${handle.port}/watches`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'watch-localhost',
+        url: 'http://localhost:3000/private',
+      }),
+    });
+    assert.equal(response.status, 400);
+  });
+
+  it('returns 404 when another user requests a watch they do not own', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const otherUser = await createUser(store, 'watch-other@example.com', 'other-password');
+    const loginOther = await login(handle.port, otherUser.email, 'other-password');
+    const otherToken = loginOther.body.token;
+    if (!otherToken) throw new Error('other user login failed');
+
+    await store.upsertWatch({
+      ...buildWatchPayload(),
+      id: 'watch-owner-only',
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      lastPrice: null,
+      lastCurrency: null,
+      lastSource: null,
+      lastCheckedAt: null,
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${handle.port}/watches/watch-owner-only`,
+      {
+        headers: { Authorization: `Bearer ${otherToken}` },
+      },
+    );
+    assert.equal(response.status, 404);
+  });
+
+  it('check-now returns 202 when onRunWatch reports a check id', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      onRunWatch: async () => 'check-123',
+    });
+    await store.upsertWatch({
+      ...buildWatchPayload(),
+      id: 'watch-202',
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      lastPrice: null,
+      lastCurrency: null,
+      lastSource: null,
+      lastCheckedAt: null,
+      enabled: false,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/watches/watch-202/check`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { id: 'check-123' });
+  });
+
+  it('check-now returns 409 when a watch already has a running check', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      onRunWatch: async () => 'check-x',
+    });
+    await store.upsertWatch({
+      ...buildWatchPayload(),
+      id: 'watch-running',
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      lastPrice: null,
+      lastCurrency: null,
+      lastSource: null,
+      lastCheckedAt: null,
+    });
+    await store.createPriceCheck({
+      id: 'check-running',
+      watchId: 'watch-running',
+      userId: user.id,
+      status: 'running',
+      price: null,
+      currency: null,
+      source: null,
+      previousPrice: null,
+      dropped: null,
+      error: null,
+      checkedAt: new Date().toISOString(),
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${handle.port}/watches/watch-running/check`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Watch already running' });
+  });
+
+  it('delete watch cascades checks and bumps watchesGeneration', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertWatch({
+      ...buildWatchPayload(),
+      id: 'watch-delete',
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      lastPrice: null,
+      lastCurrency: null,
+      lastSource: null,
+      lastCheckedAt: null,
+    });
+    await store.createPriceCheck({
+      id: 'check-delete',
+      watchId: 'watch-delete',
+      userId: user.id,
+      status: 'success',
+      price: 100,
+      currency: 'INR',
+      source: 'shopify_json',
+      previousPrice: null,
+      dropped: false,
+      error: null,
+      checkedAt: new Date().toISOString(),
+    });
+
+    const before = store.settings.watchesGeneration;
+    const deleted = await fetch(`http://127.0.0.1:${handle.port}/watches/watch-delete`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(deleted.status, 200);
+
+    assert.equal(await store.getWatch('watch-delete'), null);
+    const checks = await store.listPriceChecks({ watchId: 'watch-delete', userId: user.id });
+    assert.equal(checks.length, 0);
+    assert.equal(store.settings.watchesGeneration, before + 1);
   });
 });

@@ -5,9 +5,11 @@ import type {
   JobDocument,
   OverlayDocument,
   OverlaySuccessInput,
+  PriceCheckDocument,
   RunDocument,
   SettingsDocument,
   UserDocument,
+  WatchDocument,
 } from './types.js';
 
 const SETTINGS_ID: SettingsDocument['id'] = 'default';
@@ -29,6 +31,8 @@ type CollectionLike<T extends Record<string, unknown>> = {
     options?: { upsert?: boolean },
   ): Promise<unknown>;
   updateMany(filter: Query<T>, update: { $set: Partial<T> }): Promise<unknown>;
+  deleteOne(filter: Query<T>): Promise<unknown>;
+  deleteMany(filter: Query<T>): Promise<unknown>;
 };
 
 type StoreCollections = {
@@ -36,11 +40,23 @@ type StoreCollections = {
   settings: CollectionLike<SettingsDocument>;
   overlays: CollectionLike<OverlayDocument>;
   runs: CollectionLike<RunDocument>;
+  watches: CollectionLike<WatchDocument>;
+  priceChecks: CollectionLike<PriceCheckDocument>;
   users: CollectionLike<UserDocument>;
 };
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeSettings(
+  settings: Omit<SettingsDocument, 'id'>,
+): Omit<SettingsDocument, 'id'> {
+  return {
+    ...settings,
+    jobsGeneration: settings.jobsGeneration ?? 0,
+    watchesGeneration: settings.watchesGeneration ?? 0,
+  };
 }
 
 export function createBillingStoreFromCollections(
@@ -53,7 +69,11 @@ export function createBillingStoreFromCollections(
       if (!settings) {
         throw new ConfigError('Missing settings document in MongoDB');
       }
-      return settings;
+      const { id: _id, ...withoutId } = settings;
+      return {
+        id: SETTINGS_ID,
+        ...normalizeSettings(withoutId),
+      };
     },
 
     async listJobs(options) {
@@ -72,17 +92,63 @@ export function createBillingStoreFromCollections(
     },
 
     async upsertSettings(settings) {
+      const normalized = normalizeSettings(settings);
       await collections.settings.updateOne(
         { id: SETTINGS_ID },
         {
           $set: {
-            ...settings,
+            ...normalized,
             id: SETTINGS_ID,
-            jobsGeneration: settings.jobsGeneration ?? 0,
           },
         },
         { upsert: true },
       );
+    },
+
+    async listWatches(options) {
+      const watches = await collections.watches
+        .find(options?.userId ? { userId: options.userId } : {})
+        .toArray();
+      return watches.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+
+    async getWatch(id) {
+      return collections.watches.findOne({ id });
+    },
+
+    async upsertWatch(watch) {
+      await collections.watches.updateOne(
+        { id: watch.id },
+        { $set: watch },
+        { upsert: true },
+      );
+    },
+
+    async deleteWatch(id) {
+      await collections.priceChecks.deleteMany({ watchId: id });
+      await collections.watches.deleteOne({ id });
+    },
+
+    async createPriceCheck(check) {
+      await collections.priceChecks.insertOne(check);
+    },
+
+    async finishPriceCheck(id, update) {
+      await collections.priceChecks.updateOne({ id }, { $set: update });
+    },
+
+    async listPriceChecks(options) {
+      const checks = await collections.priceChecks
+        .find({
+          watchId: options.watchId,
+          ...(options.userId ? { userId: options.userId } : {}),
+        })
+        .toArray();
+      const sorted = checks.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
+      if (options.limit && options.limit > 0) {
+        return sorted.slice(0, options.limit);
+      }
+      return sorted;
     },
 
     async listActiveOverlays(input) {
@@ -201,13 +267,20 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   await client.connect();
   const db = client.db();
   const users = db.collection<UserDocument>('users');
+  const watches = db.collection<WatchDocument>('watches');
+  const priceChecks = db.collection<PriceCheckDocument>('price_checks');
   await users.createIndex({ email: 1 }, { unique: true });
+  await watches.createIndex({ userId: 1 });
+  await priceChecks.createIndex({ watchId: 1 });
+  await priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
   return createBillingStoreFromCollections(
     {
       jobs: db.collection<JobDocument>('jobs'),
       settings: db.collection<SettingsDocument>('settings'),
       overlays: db.collection<OverlayDocument>('learned_overlays'),
       runs: db.collection<RunDocument>('runs'),
+      watches,
+      priceChecks,
       users,
     },
     async () => {

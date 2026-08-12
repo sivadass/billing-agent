@@ -1,17 +1,15 @@
 {
-  "name": "@billing-agent/api",
+  "name": "@billing-agent/price-monitor",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "cd ../.. && tsx --test packages/price-monitor/tests/**/*.test.ts"
   },
   "dependencies": {
-    "@billing-agent/core": "*",
-    "@billing-agent/price-monitor": "*",
-    "jose": "^6.2.8"
+    "@billing-agent/core": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -36,6 +36,7 @@ export type SettingsDocument = {
     noSandbox?: boolean;
   };
   jobsGeneration: number;
+  watchesGeneration: number;
 };
 
 export type OverlayStatus = 'candidate' | 'active' | 'retired';
@@ -68,6 +69,41 @@ export type RunDocument = {
   billSummary: Record<string, string> | null;
 };
 
+export type PriceSource =
+  | 'shopify_json'
+  | 'json_ld'
+  | 'og'
+  | 'selector'
+  | 'llm';
+
+export type WatchDocument = {
+  id: string;
+  userId: string;
+  url: string;
+  title: string | null;
+  enabled: boolean;
+  schedule: string | null;
+  lastPrice: number | null;
+  lastCurrency: string | null;
+  lastSource: PriceSource | null;
+  lastCheckedAt: string | null;
+  createdAt: string;
+};
+
+export type PriceCheckDocument = {
+  id: string;
+  watchId: string;
+  userId: string;
+  status: 'running' | 'success' | 'failed';
+  price: number | null;
+  currency: string | null;
+  source: PriceSource | null;
+  previousPrice: number | null;
+  dropped: boolean | null;
+  error: string | null;
+  checkedAt: string;
+};
+
 export type OverlaySuccessInput = {
   provider: string;
   jobId: string;
@@ -81,6 +117,17 @@ export interface BillingStore {
   getJob(id: string): Promise<JobDocument | null>;
   upsertJob(job: JobDocument): Promise<void>;
   upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void>;
+  listWatches(options?: { userId?: string }): Promise<WatchDocument[]>;
+  getWatch(id: string): Promise<WatchDocument | null>;
+  upsertWatch(watch: WatchDocument): Promise<void>;
+  deleteWatch(id: string): Promise<void>;
+  createPriceCheck(check: PriceCheckDocument): Promise<void>;
+  finishPriceCheck(id: string, update: Partial<PriceCheckDocument>): Promise<void>;
+  listPriceChecks(options: {
+    watchId: string;
+    userId?: string;
+    limit?: number;
+  }): Promise<PriceCheckDocument[]>;
   listActiveOverlays(input: {
     provider: string;
     jobId: string;

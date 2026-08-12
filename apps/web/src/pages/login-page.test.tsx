@@ -38,7 +38,7 @@ describe('LoginPage', () => {
     );
 
     expect(screen.getByRole('img', { name: /billing agent/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /sign in/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /login/i })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: 'you@example.com' },
@@ -46,7 +46,7 @@ describe('LoginPage', () => {
     fireEvent.change(screen.getByLabelText(/password/i), {
       target: { value: 'secret' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
+    fireEvent.click(screen.getByRole('button', { name: /login/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Jobs hub')).toBeInTheDocument();
