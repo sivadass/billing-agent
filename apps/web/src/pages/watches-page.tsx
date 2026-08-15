@@ -1,10 +1,9 @@
-import { Alert, Badge, Button, Container, PageHeader, Table } from 'cleanplate';
+import { Alert, Button, PageHeader } from 'cleanplate';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { WatchesTable } from '../components/watches-table';
 import { ApiClientError } from '../lib/api-client';
-import { humanizeCron } from '../lib/cron-humanize';
-import { humanizeTimestamp } from '../lib/timestamp-humanize';
 import {
   deleteWatch,
   listWatchChecks,
@@ -14,19 +13,6 @@ import {
 } from '../lib/watches-api';
 import type { WatchDocument } from '../lib/types';
 import styles from './watches-page.module.scss';
-
-type WatchRow = {
-  id: string;
-  titleLabel: string;
-  url: string;
-  lastPriceLabel: string;
-  lastCheckedLabel: string;
-  scheduleLabel: string;
-  enabled: boolean;
-  enabledLabel: string;
-  statusLabel: string;
-  watch: WatchDocument;
-};
 
 export function WatchesPage() {
   const navigate = useNavigate();
@@ -106,22 +92,6 @@ export function WatchesPage() {
     }
   };
 
-  const rows: WatchRow[] = watches.map((watch) => ({
-    id: watch.id,
-    titleLabel: watch.title ?? 'Untitled watch',
-    url: watch.url,
-    lastPriceLabel:
-      watch.lastPrice != null
-        ? `${watch.lastCurrency ?? ''} ${watch.lastPrice}`.trim()
-        : '—',
-    lastCheckedLabel: watch.lastCheckedAt ? humanizeTimestamp(watch.lastCheckedAt) : 'Never',
-    scheduleLabel: humanizeCron(watch.schedule),
-    enabled: watch.enabled,
-    enabledLabel: watch.enabled ? 'Enabled' : 'Disabled',
-    statusLabel: statusByWatch[watch.id] ?? 'unknown',
-    watch,
-  }));
-
   return (
     <>
       <PageHeader
@@ -141,89 +111,15 @@ export function WatchesPage() {
         </div>
       ) : null}
       {!isLoading && !error ? (
-        <Table
-          columns={[
-            { id: 'titleLabel', title: 'Title' },
-            { id: 'url', title: 'URL' },
-            { id: 'lastPriceLabel', title: 'Last price' },
-            { id: 'lastCheckedLabel', title: 'Last checked' },
-            { id: 'scheduleLabel', title: 'Schedule' },
-            {
-              id: 'enabled',
-              title: 'Enabled',
-              customRender: (raw) => {
-                const row = raw as WatchRow;
-                return (
-                  <Badge
-                    label={row.enabledLabel}
-                    variant={row.enabled ? 'success' : 'warning'}
-                  />
-                );
-              },
-            },
-            { id: 'statusLabel', title: 'Last status' },
-            {
-              id: 'actions',
-              title: 'Actions',
-              customRender: (raw) => {
-                const row = raw as WatchRow;
-                return (
-                  <Container display="flex" gap="2" padding="0" margin="0">
-                    <Button
-                      variant="solid"
-                      size="small"
-                      onClick={() => void handleCheckNow(row.watch)}
-                      isLoading={runningWatchId === row.id}
-                      isDisabled={runningWatchId === row.id}
-                    >
-                      Check now
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="small"
-                      onClick={() => navigate(`/watches/${row.id}`)}
-                    >
-                      View
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="small"
-                      onClick={() => navigate(`/watches/${row.id}/edit`)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="small"
-                      onClick={() => void handleToggle(row.watch)}
-                    >
-                      {row.enabled ? 'Disable' : 'Enable'}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="small"
-                      onClick={() => void handleDelete(row.watch)}
-                    >
-                      Delete
-                    </Button>
-                  </Container>
-                );
-              },
-            },
-          ]}
-          data={rows}
-          mobileColumns={{
-            title: 'titleLabel',
-            subtitle: (raw) => (raw as WatchRow).url,
-            meta: (raw) => {
-              const row = raw as WatchRow;
-              return <Badge label={row.enabledLabel} variant={row.enabled ? 'success' : 'warning'} />;
-            },
-            description: (raw) => {
-              const row = raw as WatchRow;
-              return `${row.lastPriceLabel} · ${row.lastCheckedLabel}`;
-            },
-          }}
+        <WatchesTable
+          watches={watches}
+          statusByWatch={statusByWatch}
+          runningWatchId={runningWatchId}
+          onCheckNow={handleCheckNow}
+          onSelect={(watch) => navigate(`/watches/${watch.id}`)}
+          onEdit={(watch) => navigate(`/watches/${watch.id}/edit`)}
+          onToggle={handleToggle}
+          onDelete={handleDelete}
         />
       ) : null}
     </>

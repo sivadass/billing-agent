@@ -1,0 +1,20 @@
+.actions {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.watch-media {
+  min-width: 0;
+}
+
+.url-subtitle {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-badges {
+  flex-wrap: wrap;
+}
