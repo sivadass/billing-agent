@@ -4,7 +4,10 @@ import {
   BreadCrumb,
   Button,
   Container,
+  Dropdown,
   FeedbackState,
+  Icon,
+  MenuList,
   PageHeader,
   Typography,
 } from 'cleanplate';
@@ -138,18 +141,7 @@ export function WatchDetailPage() {
           watch?.url ?? 'Price check history and manual run actions.'
         }
         primaryCta={
-          <Container display="flex" gap="2" padding="0" margin="0">
-            <Button variant="outline" onClick={() => navigate('/watches')}>
-              Back to watches
-            </Button>
-            {watch ? (
-              <Button
-                variant="outline"
-                onClick={() => navigate(`/watches/${watch.id}/edit`)}
-              >
-                Edit watch
-              </Button>
-            ) : null}
+          <Container display="flex" gap="2" padding="0" margin="0" align="center">
             <Button
               variant="solid"
               isLoading={isCheckingNow}
@@ -158,6 +150,36 @@ export function WatchDetailPage() {
             >
               Check now
             </Button>
+            <Dropdown
+              placement="bottom-end"
+              offset={8}
+              trigger={
+                <Button
+                  variant="icon"
+                  aria-label="More watch actions"
+                  isDisabled={!watch}
+                >
+                  <Icon name="more_vert" />
+                </Button>
+              }
+              content={
+                <MenuList
+                  direction="vertical"
+                  size="small"
+                  items={[
+                    { label: 'Back to watches', value: 'back', icon: 'arrow_back' },
+                    { label: 'Edit watch', value: 'edit', icon: 'edit' },
+                  ]}
+                  onMenuClick={(item) => {
+                    if (item.value === 'back') {
+                      navigate('/watches');
+                    } else if (item.value === 'edit' && watch) {
+                      navigate(`/watches/${watch.id}/edit`);
+                    }
+                  }}
+                />
+              }
+            />
           </Container>
         }
       />

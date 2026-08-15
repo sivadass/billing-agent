@@ -3,10 +3,18 @@
   white-space: nowrap;
 }
 
-.url-cell {
+.watch-media {
+  min-width: 0;
+}
+
+.url-subtitle {
   display: block;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.status-badges {
+  flex-wrap: wrap;
 }

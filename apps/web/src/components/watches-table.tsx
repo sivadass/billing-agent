@@ -5,6 +5,7 @@ import {
   Container,
   Dropdown,
   Icon,
+  MediaObject,
   MenuList,
   Table,
 } from 'cleanplate';
@@ -52,6 +53,42 @@ type WatchRowMoreMenuProps = {
 function truncateUrl(url: string, maxLength = 48): string {
   if (url.length <= maxLength) return url;
   return `${url.slice(0, maxLength - 1)}…`;
+}
+
+function WatchRowMedia({ row }: { row: WatchesTableRow }) {
+  return (
+    <MediaObject
+      className={styles['watch-media']}
+      mediaAvatar={row.titleLabel}
+      title={row.titleLabel}
+      subtitle={
+        <span className={styles['url-subtitle']} title={row.url}>
+          {truncateUrl(row.url)}
+        </span>
+      }
+      description={`${row.lastPriceLabel} · ${row.lastCheckedLabel} · ${row.scheduleLabel}`}
+      descriptionLineClamp={2}
+      meta={
+        <Container
+          className={styles['status-badges']}
+          display="flex"
+          align="center"
+          gap="2"
+          padding="0"
+          margin="0"
+        >
+          <Badge
+            label={row.enabledLabel}
+            variant={row.enabled ? 'success' : 'warning'}
+          />
+          <Badge
+            label={row.statusLabel}
+            variant={watchStatusVariant(row.status)}
+          />
+        </Container>
+      }
+    />
+  );
 }
 
 function WatchRowMoreMenu({
@@ -135,6 +172,7 @@ export function WatchesTable({
       display="flex"
       align="center"
       gap="2"
+      onClick={(event) => event.stopPropagation()}
     >
       <Button
         variant="solid"
@@ -173,54 +211,19 @@ export function WatchesTable({
     <>
       <Table
         columns={[
-          { id: 'titleLabel', title: 'Title', widthPercentage: '14%' },
           {
-            id: 'url',
-            title: 'URL',
-            widthPercentage: '22%',
-            customRender: (raw) => {
-              const row = raw as WatchesTableRow;
-              return (
-                <span className={styles['url-cell']} title={row.url}>
-                  {truncateUrl(row.url)}
-                </span>
-              );
-            },
-          },
-          { id: 'lastPriceLabel', title: 'Last price', widthPercentage: '10%' },
-          { id: 'lastCheckedLabel', title: 'Last checked', widthPercentage: '12%' },
-          { id: 'scheduleLabel', title: 'Schedule', widthPercentage: '14%' },
-          {
-            id: 'enabled',
-            title: 'Enabled',
-            customRender: (raw) => {
-              const row = raw as WatchesTableRow;
-              return (
-                <Badge
-                  label={row.enabledLabel}
-                  variant={row.enabled ? 'success' : 'warning'}
-                />
-              );
-            },
-          },
-          {
-            id: 'status',
-            title: 'Last status',
-            customRender: (raw) => {
-              const row = raw as WatchesTableRow;
-              return (
-                <Badge
-                  label={row.statusLabel}
-                  variant={watchStatusVariant(row.status)}
-                />
-              );
-            },
+            id: 'watch',
+            title: 'Watch',
+            widthPercentage: '72%',
+            customRender: (raw) => (
+              <WatchRowMedia row={raw as WatchesTableRow} />
+            ),
           },
           {
             id: 'actions',
             title: 'Actions',
             textAlign: 'right',
-            widthPercentage: '14%',
+            widthPercentage: '28%',
             customRender: (raw) => renderActions(raw as WatchesTableRow),
           },
         ]}
@@ -233,10 +236,23 @@ export function WatchesTable({
           meta: (raw) => {
             const row = raw as WatchesTableRow;
             return (
-              <Badge
-                label={row.statusLabel}
-                variant={watchStatusVariant(row.status)}
-              />
+              <Container
+                className={styles['status-badges']}
+                display="flex"
+                align="center"
+                gap="2"
+                padding="0"
+                margin="0"
+              >
+                <Badge
+                  label={row.enabledLabel}
+                  variant={row.enabled ? 'success' : 'warning'}
+                />
+                <Badge
+                  label={row.statusLabel}
+                  variant={watchStatusVariant(row.status)}
+                />
+              </Container>
             );
           },
           description: (raw) => {
