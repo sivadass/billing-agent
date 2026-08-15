@@ -66,8 +66,7 @@ function WatchRowMedia({ row }: { row: WatchesTableRow }) {
           {truncateUrl(row.url)}
         </span>
       }
-      description={`${row.lastPriceLabel} · ${row.lastCheckedLabel} · ${row.scheduleLabel}`}
-      descriptionLineClamp={2}
+      description={row.lastCheckedLabel}
       meta={
         <Container
           className={styles['status-badges']}
@@ -214,16 +213,26 @@ export function WatchesTable({
           {
             id: 'watch',
             title: 'Watch',
-            widthPercentage: '72%',
+            widthPercentage: '44%',
             customRender: (raw) => (
               <WatchRowMedia row={raw as WatchesTableRow} />
             ),
           },
           {
+            id: 'lastPriceLabel',
+            title: 'Last price',
+            widthPercentage: '12%',
+          },
+          {
+            id: 'scheduleLabel',
+            title: 'Schedule',
+            widthPercentage: '18%',
+          },
+          {
             id: 'actions',
             title: 'Actions',
             textAlign: 'right',
-            widthPercentage: '28%',
+            widthPercentage: '26%',
             customRender: (raw) => renderActions(raw as WatchesTableRow),
           },
         ]}
