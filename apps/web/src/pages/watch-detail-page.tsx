@@ -1,26 +1,66 @@
-import { Alert, Badge, Button, Container, PageHeader, Table, Typography } from 'cleanplate';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Badge,
+  BreadCrumb,
+  Button,
+  Container,
+  FeedbackState,
+  PageHeader,
+  Typography,
+} from 'cleanplate';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { WatchChecksTable } from '../components/watch-checks-table';
+import { ApiClientError } from '../lib/api-client';
+import { humanizeCron } from '../lib/cron-humanize';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
+import { watchStatusLabel, watchStatusVariant } from '../lib/watch-status';
 import type { PriceCheckDocument, WatchDocument } from '../lib/types';
 import { getWatch, listWatchChecks, runWatchNow } from '../lib/watches-api';
 import styles from './watch-detail-page.module.scss';
 
-type CheckRow = {
-  id: string;
-  status: PriceCheckDocument['status'];
-  statusLabel: string;
-  checkedAtLabel: string;
-  priceLabel: string;
-  sourceLabel: string;
-  errorLabel: string;
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
+type DetailFieldProps = {
+  label: string;
+  value: ReactNode;
+  emphasize?: boolean;
 };
 
-function statusVariant(status: PriceCheckDocument['status']): 'success' | 'warning' | 'error' {
-  if (status === 'success') return 'success';
-  if (status === 'running') return 'warning';
-  return 'error';
+function DetailField({ label, value, emphasize = false }: DetailFieldProps) {
+  return (
+    <div className={styles['detail-field']}>
+      <Typography variant="small" className={styles['detail-label']}>
+        {label}
+      </Typography>
+      <Typography
+        variant={emphasize ? 'h4' : 'p'}
+        margin="0"
+        className={emphasize ? styles['detail-value-em'] : undefined}
+      >
+        {value}
+      </Typography>
+    </div>
+  );
+}
+
+type SectionProps = {
+  title: string;
+  children: ReactNode;
+};
+
+function Section({ title, children }: SectionProps) {
+  return (
+    <Container className={styles.section} padding="5" margin="0" showBorder>
+      <Typography variant="h4" margin="b-4" className={styles['section-title']}>
+        {title}
+      </Typography>
+      {children}
+    </Container>
+  );
 }
 
 export function WatchDetailPage() {
@@ -31,6 +71,7 @@ export function WatchDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingNow, setIsCheckingNow] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -44,7 +85,11 @@ export function WatchDetailPage() {
       setWatch(nextWatch);
       setChecks(nextChecks);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load watch');
+      setError(
+        loadError instanceof Error ? loadError.message : 'Failed to load watch',
+      );
+      setWatch(null);
+      setChecks([]);
     } finally {
       setIsLoading(false);
     }
@@ -55,124 +100,168 @@ export function WatchDetailPage() {
     void load();
   }, [load]);
 
-  const checkRows: CheckRow[] = useMemo(
-    () =>
-      checks.map((check) => ({
-        id: check.id,
-        status: check.status,
-        statusLabel: check.status,
-        checkedAtLabel: humanizeTimestamp(check.checkedAt),
-        priceLabel:
-          check.price != null
-            ? `${check.currency ?? ''} ${check.price}`.trim()
-            : '—',
-        sourceLabel: check.source ?? '—',
-        errorLabel: check.error ?? '—',
-      })),
-    [checks],
-  );
-
   const handleCheckNow = async () => {
     if (!watchId) return;
+    setActionError(null);
     setActionMessage(null);
     setIsCheckingNow(true);
     try {
       const result = await runWatchNow(watchId);
-      setActionMessage(`Check started: ${result.id}`);
+      setActionMessage(`Check started: ${shortId(result.id)}`);
       await load();
     } catch (runError) {
-      setError(
-        runError instanceof Error ? runError.message : 'Failed to trigger check',
+      setActionError(
+        runError instanceof ApiClientError
+          ? runError.message
+          : 'Failed to trigger check',
       );
     } finally {
       setIsCheckingNow(false);
     }
   };
 
+  const latestStatus = checks[0]?.status ?? 'never';
+
   return (
-    <>
+    <div className={styles['watch-detail']}>
+      <BreadCrumb
+        margin="b-2"
+        items={[
+          { label: 'Price watches', href: '/watches' },
+          { label: watch ? watch.title ?? shortId(watch.id) : 'Detail' },
+        ]}
+      />
+
       <PageHeader
         title={watch ? watch.title ?? watch.id : 'Watch detail'}
-        subtitle={watch?.url ?? 'Price check history and manual run actions.'}
+        subtitle={
+          watch?.url ?? 'Price check history and manual run actions.'
+        }
         primaryCta={
           <Container display="flex" gap="2" padding="0" margin="0">
             <Button variant="outline" onClick={() => navigate('/watches')}>
               Back to watches
             </Button>
             {watch ? (
-              <Button variant="outline" onClick={() => navigate(`/watches/${watch.id}/edit`)}>
+              <Button
+                variant="outline"
+                onClick={() => navigate(`/watches/${watch.id}/edit`)}
+              >
                 Edit watch
               </Button>
             ) : null}
-            <Button variant="solid" isLoading={isCheckingNow} onClick={() => void handleCheckNow()}>
+            <Button
+              variant="solid"
+              isLoading={isCheckingNow}
+              isDisabled={!watch || isCheckingNow}
+              onClick={() => void handleCheckNow()}
+            >
               Check now
             </Button>
           </Container>
         }
       />
-      {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
-      {actionMessage ? <Alert variant="success" margin="t-3" message={actionMessage} /> : null}
-      {isLoading ? (
+
+      {error ? <Alert variant="error" margin="t-4" message={error} /> : null}
+      {actionError ? <Alert variant="error" margin="t-4" message={actionError} /> : null}
+      {actionMessage ? (
+        <Alert variant="success" margin="t-4" message={actionMessage} />
+      ) : null}
+
+      {isLoading && !watch ? (
         <div className={styles['loading-state']}>
           <Loader size={56} />
         </div>
       ) : null}
-      {!isLoading && watch ? (
-        <>
-          <div className={styles['meta-grid']}>
-            <div className={styles['meta-card']}>
-              <Typography variant="small" className={styles['meta-label']}>
-                Last price
-              </Typography>
-              <Typography variant="h4" margin="0">
-                {watch.lastPrice != null
-                  ? `${watch.lastCurrency ?? ''} ${watch.lastPrice}`.trim()
-                  : '—'}
-              </Typography>
-            </div>
-            <div className={styles['meta-card']}>
-              <Typography variant="small" className={styles['meta-label']}>
-                Last checked
-              </Typography>
-              <Typography variant="h4" margin="0">
-                {watch.lastCheckedAt ? humanizeTimestamp(watch.lastCheckedAt) : 'Never'}
-              </Typography>
-            </div>
-            <div className={styles['meta-card']}>
-              <Typography variant="small" className={styles['meta-label']}>
-                Enabled
-              </Typography>
-              <Badge
-                label={watch.enabled ? 'Enabled' : 'Disabled'}
-                variant={watch.enabled ? 'success' : 'warning'}
-              />
-            </div>
-          </div>
-          <Table
-            columns={[
-              { id: 'id', title: 'Check id' },
-              {
-                id: 'status',
-                title: 'Status',
-                customRender: (raw) => {
-                  const row = raw as CheckRow;
-                  return <Badge label={row.statusLabel} variant={statusVariant(row.status)} />;
-                },
-              },
-              { id: 'checkedAtLabel', title: 'Checked' },
-              { id: 'priceLabel', title: 'Price' },
-              { id: 'sourceLabel', title: 'Source' },
-              { id: 'errorLabel', title: 'Error' },
-            ]}
-            data={checkRows}
-            mobileColumns={{
-              title: 'statusLabel',
-              subtitle: (raw) => (raw as CheckRow).checkedAtLabel,
-              description: (raw) => (raw as CheckRow).priceLabel,
-            }}
-          />
-        </>
+
+      {!isLoading && !watch && !error ? (
+        <FeedbackState
+          variant="empty"
+          margin="t-5"
+          title="Watch not found"
+          description="This watch id is missing or no longer available."
+          primaryAction={{
+            label: 'Back to watches',
+            onClick: () => navigate('/watches'),
+          }}
+        />
       ) : null}
-    </>
+
+      {watch ? (
+        <div className={styles['content-stack']}>
+          <Container className={styles['metrics-row']} display="flex" gap="3" padding="0">
+            <Container className={styles.metric} padding="5" showBorder>
+              <DetailField
+                label="Last price"
+                value={
+                  watch.lastPrice != null
+                    ? `${watch.lastCurrency ?? ''} ${watch.lastPrice}`.trim()
+                    : '—'
+                }
+                emphasize
+              />
+            </Container>
+            <Container className={styles.metric} padding="5" showBorder>
+              <DetailField
+                label="Last checked"
+                value={
+                  watch.lastCheckedAt
+                    ? humanizeTimestamp(watch.lastCheckedAt)
+                    : 'Never'
+                }
+                emphasize
+              />
+            </Container>
+            <Container className={styles.metric} padding="5" showBorder>
+              <DetailField
+                label="Schedule"
+                value={humanizeCron(watch.schedule)}
+                emphasize
+              />
+            </Container>
+            <Container className={styles.metric} padding="5" showBorder>
+              <DetailField
+                label="Enabled"
+                value={
+                  <Badge
+                    label={watch.enabled ? 'Enabled' : 'Disabled'}
+                    variant={watch.enabled ? 'success' : 'warning'}
+                  />
+                }
+              />
+            </Container>
+            <Container className={styles.metric} padding="5" showBorder>
+              <DetailField
+                label="Last status"
+                value={
+                  <Badge
+                    label={watchStatusLabel(latestStatus)}
+                    variant={watchStatusVariant(latestStatus)}
+                  />
+                }
+              />
+            </Container>
+          </Container>
+
+          <Section title="Product URL">
+            <Typography variant="p" margin="0" className={styles['url-value']}>
+              <a href={watch.url} target="_blank" rel="noreferrer">
+                {watch.url}
+              </a>
+            </Typography>
+          </Section>
+
+          <Section title="Price check history">
+            {checks.length > 0 ? (
+              <WatchChecksTable checks={checks} />
+            ) : (
+              <Typography variant="p" margin="0" className={styles.muted}>
+                No price checks yet. Run a manual check to start tracking.
+              </Typography>
+            )}
+          </Section>
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -1,0 +1,12 @@
+.actions {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.url-cell {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

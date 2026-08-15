@@ -54,7 +54,7 @@ describe('WatchDetailPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Demo watch')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Demo watch' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /check now/i }));
     await waitFor(() => {
       expect(watchesApi.runWatchNow).toHaveBeenCalledWith('watch-1');
