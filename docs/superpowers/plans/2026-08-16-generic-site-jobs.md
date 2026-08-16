@@ -201,10 +201,10 @@ export function decryptSecret(
 - Key: 32 bytes from `SECRETS_MASTER_KEY` (accept 64-char hex or 44-char base64). Else `ConfigError('Missing or invalid environment variable: SECRETS_MASTER_KEY')`.
 - `createCipheriv('aes-256-gcm', key, iv)` with 12-byte random IV.
 
-- [ ] **Step 1:** Test round-trip and “wrong key throws”.
-- [ ] **Step 2:** Run test — FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Tests pass. Never log plaintext.
+- [x] **Step 1:** Test round-trip and “wrong key throws”.
+- [x] **Step 2:** Run test — FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Tests pass. Never log plaintext.
 
 ### Task 3: Job runner uses adapterId + decrypted secrets + generic result
 
