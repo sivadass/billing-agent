@@ -153,7 +153,7 @@ function isRecoverableError(error: AppError): boolean {
   );
 }
 
-function runSummary(result: BillResult): RunDocument['billSummary'] {
+function runSummary(result: BillResult): RunDocument['result'] {
   return {
     amount: result.amount,
     accountLabel: result.accountLabel,
@@ -161,6 +161,15 @@ function runSummary(result: BillResult): RunDocument['billSummary'] {
     ...(result.billPeriod ? { billPeriod: result.billPeriod } : {}),
     ...(result.status ? { status: result.status } : {}),
   };
+}
+
+function jobAdapterId(job: JobConfig): string {
+  const legacyProvider = (job as JobConfig & { provider?: string }).provider;
+  const adapterId = job.adapterId ?? legacyProvider;
+  if (!adapterId) {
+    throw new ConfigError(`Job ${job.id} is missing adapterId`);
+  }
+  return adapterId;
 }
 
 async function captureScreenshot(
@@ -207,12 +216,15 @@ export async function runJob(
   let overlayActivated = false;
   logger.info('job start');
 
+  const adapterId = jobAdapterId(job);
+
   if (runnerDeps.store) {
     await runnerDeps.store.createRun({
       id: runId,
       jobId: job.id,
       userId: job.userId,
-      provider: job.provider,
+      engine: job.engine,
+      adapterId,
       status: 'running',
       startedAt: new Date(startedAt).toISOString(),
       finishedAt: null,
@@ -223,7 +235,7 @@ export async function runJob(
       recoveryAttempted: false,
       recoverySucceeded: false,
       overlayActivated: false,
-      billSummary: null,
+      result: null,
     });
   }
   runnerDeps.onRunCreated?.(runId);
@@ -234,13 +246,13 @@ export async function runJob(
       deps.proposeOverlayPatch ?? createRecoveryPatchProposer(app, runnerDeps);
 
     const result = await runnerDeps.withBrowser(app.browser, async (page) => {
-      const adapter = runnerDeps.getAdapter(job.provider);
+      const adapter = runnerDeps.getAdapter(adapterId);
       const captchaSolver = createLazyCaptchaSolver(runnerDeps, app.mistral);
 
       const activeOverlay = runnerDeps.store
         ? (
             await runnerDeps.store.listActiveOverlays({
-              provider: job.provider,
+              provider: adapterId,
               jobId: job.id,
             })
           )[0]?.patch
@@ -301,7 +313,7 @@ export async function runJob(
 
         const retryResult = await runAdapter(patch);
         const overlay = await runnerDeps.store.recordOverlaySuccess({
-          provider: job.provider,
+          provider: adapterId,
           jobId: job.id,
           fingerprint,
           patch,
@@ -338,7 +350,7 @@ export async function runJob(
         recoveryAttempted,
         recoverySucceeded,
         overlayActivated,
-        billSummary: runSummary(result),
+        result: runSummary(result),
       });
     }
 
@@ -377,7 +389,7 @@ export async function runJob(
         recoveryAttempted,
         recoverySucceeded,
         overlayActivated,
-        billSummary: null,
+        result: null,
       });
     }
 

@@ -1,14 +1,47 @@
+import type { WorkflowStep } from '../workflow/types.js';
+
 export type SelectorOverlayValue = string | string[];
 export type SelectorOverlayPatch = Record<string, SelectorOverlayValue>;
+
+export type JobEngine = 'workflow' | 'adapter';
+export type FieldType = 'string' | 'number' | 'price' | 'date';
+export type NotifyOn = 'always' | 'change' | 'drop' | 'failure_only';
+export type NotifyChannel =
+  | { type: 'ntfy'; topic: string; baseUrl?: string }
+  | { type: 'webhook'; url: string };
+
+export type ExtractField = { key: string; label: string; type: FieldType };
 
 export type JobDocument = {
   id: string;
   userId: string;
-  provider: string;
+  name: string;
   enabled: boolean;
   schedule: string | null;
-  credentialsEnv: Record<string, string>;
-  notify: { title: string };
+  startUrl: string;
+  engine: JobEngine;
+  adapterId?: string;
+  goal: string;
+  schema: ExtractField[];
+  workflow: WorkflowStep[];
+  secretIds: string[];
+  notify: { title: string; on: NotifyOn; channel: NotifyChannel };
+  lastResult: Record<string, string | number> | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SecretDocument = {
+  id: string;
+  userId: string;
+  jobId: string | null;
+  conversationId: string | null;
+  key: string;
+  ciphertext: string;
+  iv: string;
+  tag: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type UserDocument = {
@@ -22,7 +55,8 @@ export type SettingsDocument = {
   id: 'default';
   ntfy: {
     baseUrl: string;
-    topicEnv: string;
+    topicEnv?: string;
+    defaultTopic?: string;
     priority: string;
   };
   mistral: {
@@ -36,7 +70,7 @@ export type SettingsDocument = {
     noSandbox?: boolean;
   };
   jobsGeneration: number;
-  watchesGeneration: number;
+  watchesGeneration?: number;
 };
 
 export type OverlayStatus = 'candidate' | 'active' | 'retired';
@@ -55,7 +89,8 @@ export type RunDocument = {
   id: string;
   jobId: string;
   userId: string;
-  provider: string;
+  engine: JobEngine;
+  adapterId?: string;
   status: 'running' | 'success' | 'failed';
   startedAt: string;
   finishedAt: string | null;
@@ -66,7 +101,7 @@ export type RunDocument = {
   recoveryAttempted: boolean;
   recoverySucceeded: boolean;
   overlayActivated: boolean;
-  billSummary: Record<string, string> | null;
+  result: Record<string, unknown> | null;
 };
 
 export type PriceSource =
@@ -117,6 +152,13 @@ export interface BillingStore {
   getJob(id: string): Promise<JobDocument | null>;
   upsertJob(job: JobDocument): Promise<void>;
   upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void>;
+  upsertSecret(secret: SecretDocument): Promise<void>;
+  listSecrets(options: {
+    userId: string;
+    jobId?: string;
+    conversationId?: string;
+  }): Promise<SecretDocument[]>;
+  deleteSecretsForJob(jobId: string): Promise<void>;
   listWatches(options?: { userId?: string }): Promise<WatchDocument[]>;
   getWatch(id: string): Promise<WatchDocument | null>;
   upsertWatch(watch: WatchDocument): Promise<void>;

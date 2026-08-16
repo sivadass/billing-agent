@@ -23,10 +23,8 @@ describe('loadConfig', () => {
 
     const job = cfg.jobs.find((j) => j.id === 'home-eb');
     assert.ok(job);
-    assert.deepEqual(job.credentialsEnv, {
-      username: 'TNPDCL_USERNAME',
-      password: 'TNPDCL_PASSWORD',
-    });
+    assert.equal(job.adapterId, 'tnpdcl');
+    assert.equal(job.engine, 'adapter');
   });
 
   it('throws when ntfy topic env is missing', () => {
@@ -34,6 +32,17 @@ describe('loadConfig', () => {
       () => loadConfig({ configPath: fixture, env: {} }),
       (err: unknown) => err instanceof ConfigError,
     );
+  });
+
+  it('loads new-shape adapter jobs from fixture', () => {
+    const cfg = loadConfig({
+      configPath: fixture,
+      env: { NTFY_TOPIC: 'bills' },
+    });
+    const smoke = cfg.jobs.find((j) => j.id === 'smoke-test');
+    assert.ok(smoke);
+    assert.equal(smoke.engine, 'adapter');
+    assert.equal(smoke.adapterId, 'dummy');
   });
 });
 

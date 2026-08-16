@@ -7,6 +7,7 @@ import type {
   PriceCheckDocument,
   RunDocument,
   SelectorOverlayPatch,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
   WatchDocument,
@@ -104,19 +105,47 @@ function createStore() {
   const settings = new MemoryCollection<SettingsDocument>();
   const watches = new MemoryCollection<WatchDocument>();
   const priceChecks = new MemoryCollection<PriceCheckDocument>();
+  const secrets = new MemoryCollection<SecretDocument>();
   const store = createBillingStoreFromCollections(
     {
-      jobs: new MemoryCollection<JobDocument>(),
+      jobs: new MemoryCollection<Record<string, unknown>>(),
       settings,
       overlays: new MemoryCollection<OverlayDocument>(),
-      runs: new MemoryCollection<RunDocument>(),
+      runs: new MemoryCollection<Record<string, unknown>>(),
+      secrets,
       watches,
       priceChecks,
       users,
     },
     async () => {},
   );
-  return { store, users, settings, watches, priceChecks };
+  return { store, users, settings, watches, priceChecks, secrets };
+}
+
+function makeJob(overrides: Partial<JobDocument> = {}): JobDocument {
+  return {
+    id: 'home-eb',
+    userId: 'user-1',
+    name: 'TNPDCL Bill',
+    enabled: true,
+    schedule: '0 9 * * *',
+    startUrl: '',
+    engine: 'adapter',
+    adapterId: 'tnpdcl',
+    goal: '',
+    schema: [],
+    workflow: [],
+    secretIds: [],
+    notify: {
+      title: 'TNPDCL Bill',
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
+    },
+    lastResult: null,
+    createdAt: '2026-08-09T00:00:00.000Z',
+    updatedAt: '2026-08-09T00:00:00.000Z',
+    ...overrides,
+  };
 }
 
 function makeWatch(overrides: Partial<WatchDocument> = {}): WatchDocument {
@@ -156,18 +185,9 @@ function makePriceCheck(overrides: Partial<PriceCheckDocument> = {}): PriceCheck
 describe('mongo store', () => {
   it('upsertJob and listJobs round-trip', async () => {
     const { store } = createStore();
-    const job: JobDocument = {
+    const job = makeJob({
       id: 'home-eb',
-      userId: 'user-1',
-      provider: 'tnpdcl',
-      enabled: true,
-      schedule: '0 9 * * *',
-      credentialsEnv: {
-        username: 'TNPDCL_USERNAME',
-        password: 'TNPDCL_PASSWORD',
-      },
-      notify: { title: 'TNPDCL Bill' },
-    };
+    });
 
     await store.upsertJob(job);
     const jobs = await store.listJobs();
@@ -177,20 +197,11 @@ describe('mongo store', () => {
 
   it('listJobs filters by userId when provided', async () => {
     const { store } = createStore();
-    const jobForUser1: JobDocument = {
-      id: 'home-eb',
-      userId: 'user-1',
-      provider: 'tnpdcl',
-      enabled: true,
-      schedule: '0 9 * * *',
-      credentialsEnv: {},
-      notify: { title: 'TNPDCL Bill' },
-    };
-    const jobForUser2: JobDocument = {
-      ...jobForUser1,
+    const jobForUser1 = makeJob({ id: 'home-eb', userId: 'user-1' });
+    const jobForUser2 = makeJob({
       id: 'other-eb',
       userId: 'user-2',
-    };
+    });
 
     await store.upsertJob(jobForUser1);
     await store.upsertJob(jobForUser2);
@@ -211,7 +222,8 @@ describe('mongo store', () => {
       id: 'run-1',
       jobId: 'home-eb',
       userId: 'user-1',
-      provider: 'tnpdcl',
+      engine: 'adapter',
+      adapterId: 'tnpdcl',
       status: 'success',
       startedAt: '2026-08-09T00:00:00.000Z',
       finishedAt: '2026-08-09T00:01:00.000Z',
@@ -222,7 +234,7 @@ describe('mongo store', () => {
       recoveryAttempted: false,
       recoverySucceeded: false,
       overlayActivated: false,
-      billSummary: null,
+      result: null,
     };
     const runForUser2: RunDocument = {
       ...runForUser1,
@@ -363,6 +375,92 @@ describe('mongo store', () => {
 
     const missing = await store.findUserByEmail('missing@example.com');
     assert.equal(missing, null);
+  });
+
+  it('coerces legacy jobs on read', async () => {
+    const legacyJobs = new MemoryCollection<Record<string, unknown>>();
+    const secrets = new MemoryCollection<SecretDocument>();
+    const legacyStore = createBillingStoreFromCollections(
+      {
+        jobs: legacyJobs,
+        settings: new MemoryCollection<SettingsDocument>(),
+        overlays: new MemoryCollection<OverlayDocument>(),
+        runs: new MemoryCollection<Record<string, unknown>>(),
+        secrets,
+        watches: new MemoryCollection<WatchDocument>(),
+        priceChecks: new MemoryCollection<PriceCheckDocument>(),
+        users: new MemoryCollection<UserDocument>(),
+      },
+      async () => {},
+    );
+
+    await legacyJobs.insertOne({
+      id: 'legacy-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: '0 9 * * *',
+      credentialsEnv: {
+        username: 'TNPDCL_USERNAME',
+        password: 'TNPDCL_PASSWORD',
+      },
+      notify: { title: 'Legacy Bill' },
+    });
+
+    const loaded = await legacyStore.getJob('legacy-eb');
+    assert.ok(loaded);
+    assert.equal(loaded.engine, 'adapter');
+    assert.equal(loaded.adapterId, 'tnpdcl');
+    assert.equal(loaded.name, 'Legacy Bill');
+    assert.deepEqual(loaded.schema, []);
+    assert.deepEqual(loaded.secretIds, []);
+    assert.equal(loaded.notify.on, 'always');
+    assert.equal(loaded.notify.channel.type, 'ntfy');
+  });
+
+  it('coerces legacy runs on read', async () => {
+    const runs = new MemoryCollection<Record<string, unknown>>();
+    const secrets = new MemoryCollection<SecretDocument>();
+    const legacyStore = createBillingStoreFromCollections(
+      {
+        jobs: new MemoryCollection<Record<string, unknown>>(),
+        settings: new MemoryCollection<SettingsDocument>(),
+        overlays: new MemoryCollection<OverlayDocument>(),
+        runs,
+        secrets,
+        watches: new MemoryCollection<WatchDocument>(),
+        priceChecks: new MemoryCollection<PriceCheckDocument>(),
+        users: new MemoryCollection<UserDocument>(),
+      },
+      async () => {},
+    );
+
+    await runs.insertOne({
+      id: 'run-legacy',
+      jobId: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      status: 'success',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      finishedAt: '2026-08-09T00:01:00.000Z',
+      durationMs: 60_000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: { amount: '₹100', accountLabel: '****1234' },
+    });
+
+    const loaded = await legacyStore.getRun('run-legacy');
+    assert.ok(loaded);
+    assert.equal(loaded.engine, 'adapter');
+    assert.equal(loaded.adapterId, 'tnpdcl');
+    assert.deepEqual(loaded.result, {
+      amount: '₹100',
+      accountLabel: '****1234',
+    });
   });
 
   it('recordOverlaySuccess activates after three successes', async () => {

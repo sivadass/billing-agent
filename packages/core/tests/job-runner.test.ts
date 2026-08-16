@@ -12,11 +12,25 @@ import { runJob, runJobs } from '../src/job-runner.ts';
 const job: JobConfig = {
   id: 'fake-job',
   userId: 'user-1',
-  provider: 'fake',
+  name: 'Fake bill',
   enabled: true,
   schedule: null,
+  startUrl: 'https://example.test/fake',
+  engine: 'adapter',
+  adapterId: 'fake',
+  goal: '',
+  schema: [],
+  workflow: [],
+  secretIds: [],
+  notify: {
+    title: 'Fake bill',
+    on: 'always',
+    channel: { type: 'ntfy', topic: '' },
+  },
+  lastResult: null,
+  createdAt: '2026-08-16T00:00:00.000Z',
+  updatedAt: '2026-08-16T00:00:00.000Z',
   credentialsEnv: { username: 'FAKE_JOB_USERNAME' },
-  notify: { title: 'Fake bill' },
 };
 
 const app: AppConfig = {
@@ -127,6 +141,9 @@ describe('runJob', () => {
       getJob: async () => null,
       upsertJob: async () => {},
       upsertSettings: async () => {},
+      upsertSecret: async () => {},
+      listSecrets: async () => [],
+      deleteSecretsForJob: async () => {},
       listWatches: async () => [],
       getWatch: async () => null,
       upsertWatch: async () => {},

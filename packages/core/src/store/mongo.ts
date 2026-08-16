@@ -1,5 +1,6 @@
 import { MongoClient } from 'mongodb';
 import { ConfigError } from '../errors.js';
+import { assertJobDocument } from './assert-job.js';
 import type {
   BillingStore,
   JobDocument,
@@ -7,6 +8,7 @@ import type {
   OverlaySuccessInput,
   PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
   WatchDocument,
@@ -36,10 +38,11 @@ type CollectionLike<T extends Record<string, unknown>> = {
 };
 
 type StoreCollections = {
-  jobs: CollectionLike<JobDocument>;
+  jobs: CollectionLike<Record<string, unknown>>;
   settings: CollectionLike<SettingsDocument>;
   overlays: CollectionLike<OverlayDocument>;
-  runs: CollectionLike<RunDocument>;
+  runs: CollectionLike<Record<string, unknown>>;
+  secrets: CollectionLike<SecretDocument>;
   watches: CollectionLike<WatchDocument>;
   priceChecks: CollectionLike<PriceCheckDocument>;
   users: CollectionLike<UserDocument>;
@@ -56,6 +59,81 @@ function normalizeSettings(
     ...settings,
     jobsGeneration: settings.jobsGeneration ?? 0,
     watchesGeneration: settings.watchesGeneration ?? 0,
+  };
+}
+
+function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
+  if (typeof raw.engine === 'string') {
+    return assertJobDocument(raw);
+  }
+  return assertJobDocument({
+    ...raw,
+    name:
+      raw.notify && typeof raw.notify === 'object'
+        ? (raw.notify as { title?: string }).title ?? raw.id
+        : raw.id,
+    engine: 'adapter',
+    adapterId: raw.provider,
+    startUrl: '',
+    goal: '',
+    schema: [],
+    workflow: [],
+    secretIds: [],
+    lastResult: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    notify: {
+      title: (raw.notify as { title: string }).title,
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
+    },
+  });
+}
+
+function coerceLegacyRun(raw: Record<string, unknown>): RunDocument {
+  if (typeof raw.engine === 'string') {
+    const run = raw as RunDocument;
+    return {
+      ...run,
+      result: run.result ?? null,
+    };
+  }
+  return {
+    id: String(raw.id),
+    jobId: String(raw.jobId),
+    userId: String(raw.userId),
+    engine: 'adapter',
+    adapterId:
+      typeof raw.provider === 'string' ? raw.provider : undefined,
+    status: raw.status as RunDocument['status'],
+    startedAt: String(raw.startedAt),
+    finishedAt:
+      raw.finishedAt === null || typeof raw.finishedAt === 'string'
+        ? raw.finishedAt
+        : null,
+    durationMs:
+      raw.durationMs === null || typeof raw.durationMs === 'number'
+        ? raw.durationMs
+        : null,
+    errorCode:
+      raw.errorCode === null || typeof raw.errorCode === 'string'
+        ? raw.errorCode
+        : null,
+    errorMessage:
+      raw.errorMessage === null || typeof raw.errorMessage === 'string'
+        ? raw.errorMessage
+        : null,
+    screenshotPath:
+      raw.screenshotPath === null || typeof raw.screenshotPath === 'string'
+        ? raw.screenshotPath
+        : null,
+    recoveryAttempted: Boolean(raw.recoveryAttempted),
+    recoverySucceeded: Boolean(raw.recoverySucceeded),
+    overlayActivated: Boolean(raw.overlayActivated),
+    result:
+      raw.billSummary && typeof raw.billSummary === 'object'
+        ? (raw.billSummary as Record<string, unknown>)
+        : null,
   };
 }
 
@@ -80,11 +158,14 @@ export function createBillingStoreFromCollections(
       const jobs = await collections.jobs
         .find(options?.userId ? { userId: options.userId } : {})
         .toArray();
-      return jobs.sort((a, b) => a.id.localeCompare(b.id));
+      return jobs
+        .map((job) => coerceLegacyJob(job))
+        .sort((a, b) => a.id.localeCompare(b.id));
     },
 
     async getJob(id) {
-      return collections.jobs.findOne({ id });
+      const job = await collections.jobs.findOne({ id });
+      return job ? coerceLegacyJob(job) : null;
     },
 
     async upsertJob(job) {
@@ -103,6 +184,31 @@ export function createBillingStoreFromCollections(
         },
         { upsert: true },
       );
+    },
+
+    async upsertSecret(secret) {
+      await collections.secrets.updateOne(
+        { id: secret.id },
+        { $set: secret },
+        { upsert: true },
+      );
+    },
+
+    async listSecrets(options) {
+      const secrets = await collections.secrets
+        .find({
+          userId: options.userId,
+          ...(options.jobId !== undefined ? { jobId: options.jobId } : {}),
+          ...(options.conversationId !== undefined
+            ? { conversationId: options.conversationId }
+            : {}),
+        })
+        .toArray();
+      return secrets.sort((a, b) => a.key.localeCompare(b.key));
+    },
+
+    async deleteSecretsForJob(jobId) {
+      await collections.secrets.deleteMany({ jobId });
     },
 
     async listWatches(options) {
@@ -237,7 +343,9 @@ export function createBillingStoreFromCollections(
           ...(options?.jobId ? { jobId: options.jobId } : {}),
         })
         .toArray();
-      const sorted = runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      const sorted = runs
+        .map((run) => coerceLegacyRun(run))
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
       if (options?.limit && options.limit > 0) {
         return sorted.slice(0, options.limit);
       }
@@ -245,7 +353,8 @@ export function createBillingStoreFromCollections(
     },
 
     async getRun(id) {
-      return collections.runs.findOne({ id });
+      const run = await collections.runs.findOne({ id });
+      return run ? coerceLegacyRun(run) : null;
     },
 
     async findUserByEmail(email) {
@@ -275,10 +384,11 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   await priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
   return createBillingStoreFromCollections(
     {
-      jobs: db.collection<JobDocument>('jobs'),
+      jobs: db.collection('jobs') as unknown as CollectionLike<Record<string, unknown>>,
       settings: db.collection<SettingsDocument>('settings'),
       overlays: db.collection<OverlayDocument>('learned_overlays'),
-      runs: db.collection<RunDocument>('runs'),
+      runs: db.collection('runs') as unknown as CollectionLike<Record<string, unknown>>,
+      secrets: db.collection<SecretDocument>('secrets'),
       watches,
       priceChecks,
       users,

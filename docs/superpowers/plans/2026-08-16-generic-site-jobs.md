@@ -134,10 +134,10 @@ Add to `BillingStore`: `upsertSecret`, `listSecrets({ userId, jobId?, conversati
 
 Settings: `ntfy.topicEnv` optional; add optional `ntfy.defaultTopic`; remove required `watchesGeneration` (read as `?? 0` during dual-run if watch code still exists).
 
-- [ ] **Step 1:** Write `packages/core/tests/job-document.test.ts` asserting a fixture new-shape job is accepted by a `assertJobDocument(raw: unknown): JobDocument` helper (add the helper in `packages/core/src/store/assert-job.ts`).
-- [ ] **Step 2:** Run `npm run test -w @billing-agent/core -- tests/job-document.test.ts` — expect FAIL (helper missing).
-- [ ] **Step 3:** Implement `assertJobDocument` + update `JobDocument` / `RunDocument` / `SettingsDocument` / `BillingStore`.
-- [ ] **Step 4:** Update `mongo.ts` to read/write new fields. When reading a **legacy** job (`provider` present, no `engine`), map in the driver:
+- [x] **Step 1:** Write `packages/core/tests/job-document.test.ts` asserting a fixture new-shape job is accepted by a `assertJobDocument(raw: unknown): JobDocument` helper (add the helper in `packages/core/src/store/assert-job.ts`).
+- [x] **Step 2:** Run `npm run test -w @billing-agent/core -- tests/job-document.test.ts` — expect FAIL (helper missing).
+- [x] **Step 3:** Implement `assertJobDocument` + update `JobDocument` / `RunDocument` / `SettingsDocument` / `BillingStore`.
+- [x] **Step 4:** Update `mongo.ts` to read/write new fields. When reading a **legacy** job (`provider` present, no `engine`), map in the driver:
 
 ```ts
 function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
