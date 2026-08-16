@@ -667,6 +667,337 @@ describe('POST /jobs canonical shape', () => {
   });
 });
 
+describe('POST /jobs rejects malformed supplied values', () => {
+  async function postJob(
+    port: number,
+    token: string,
+    overrides: Record<string, unknown>,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload(overrides)),
+    });
+  }
+
+  const malformed: Array<[string, Record<string, unknown>]> = [
+    ['a non-boolean enabled', { enabled: 'yes' }],
+    ['a non-string, non-null schedule', { schedule: 5 }],
+    ['a non-string adapterId', { adapterId: 7 }],
+    ['a non-string name', { name: 12 }],
+    ['a non-string goal', { goal: false }],
+    ['a non-object notify', { notify: 'Bill' }],
+    [
+      'an unknown notify.on',
+      {
+        notify: { title: 'Bill', on: 'sometimes', channel: { type: 'ntfy', topic: 'bills' } },
+      },
+    ],
+    [
+      'a non-string notify.on',
+      { notify: { title: 'Bill', on: 5, channel: { type: 'ntfy', topic: 'bills' } } },
+    ],
+    [
+      'a non-string notify.title',
+      { notify: { title: 9, on: 'always', channel: { type: 'ntfy', topic: 'bills' } } },
+    ],
+    [
+      'an unknown notify.channel type',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'carrier-pigeon' } } },
+    ],
+    [
+      'a webhook channel without a url',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'webhook' } } },
+    ],
+    [
+      'a webhook channel with an empty url',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'webhook', url: '' } } },
+    ],
+    [
+      'a non-string ntfy topic',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'ntfy', topic: 42 } } },
+    ],
+    [
+      'a non-string ntfy baseUrl',
+      {
+        notify: {
+          title: 'Bill',
+          on: 'always',
+          channel: { type: 'ntfy', topic: 'bills', baseUrl: 7 },
+        },
+      },
+    ],
+  ];
+
+  for (const [label, overrides] of malformed) {
+    it(`returns 400 for ${label}`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await postJob(handle.port, token, {
+        id: 'malformed',
+        ...overrides,
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('malformed'), null);
+    });
+  }
+
+  it('still fills omitted notify fields from the defaults', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'partial-notify',
+        engine: 'adapter',
+        adapterId: 'dummy',
+        notify: { title: 'Only a title' },
+      }),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.name, 'Only a title');
+    assert.deepEqual(created.notify, {
+      title: 'Only a title',
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
+    });
+  });
+
+  it('returns a fixed 400 for a malformed JSON body', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: '{"id": "broken",',
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'Invalid request body' });
+  });
+});
+
+describe('job URLs must pass the public-url check', () => {
+  const blockedUrls = [
+    'http://localhost:3000/private',
+    'http://127.0.0.1:8080/admin',
+    'http://10.1.2.3/internal',
+    'http://169.254.169.254/latest/meta-data/',
+    'https://printer.local/status',
+    'https://vault.internal/secret',
+    'https://user:pass@example.com/bill',
+    'file:///etc/passwd',
+    'not-a-url',
+  ];
+
+  for (const url of blockedUrls) {
+    it(`rejects startUrl ${url} with 400`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(canonicalJobPayload({ id: 'ssrf', startUrl: url })),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('ssrf'), null);
+    });
+
+    it(`rejects a webhook notify channel pointing at ${url} with 400`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id: 'ssrf-webhook',
+            notify: { title: 'Bill', on: 'always', channel: { type: 'webhook', url } },
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('ssrf-webhook'), null);
+    });
+  }
+
+  it('accepts a public https webhook channel', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'public-webhook',
+          notify: {
+            title: 'Bill',
+            on: 'always',
+            channel: { type: 'webhook', url: 'https://hooks.example.com/bill' },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.notify.channel, {
+      type: 'webhook',
+      url: 'https://hooks.example.com/bill',
+    });
+  });
+});
+
+describe('PATCH /jobs/:id validates only what the caller supplies', () => {
+  async function patchJob(
+    port: number,
+    token: string,
+    body: Record<string, unknown>,
+    jobId = 'home-eb',
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs/${jobId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('rejects malformed supplied values with 400 and leaves the job untouched', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const original = canonicalAdapterJob({ userId: user.id });
+    await store.upsertJob(original);
+
+    for (const body of [
+      { enabled: 'nope' },
+      { schedule: 12 },
+      { notify: { on: 'whenever' } },
+      { notify: { channel: { type: 'smoke-signal' } } },
+      { notify: { channel: { type: 'webhook', url: 'http://localhost/hook' } } },
+      { startUrl: 'file:///etc/passwd' },
+      { startUrl: 'http://169.254.169.254/latest/meta-data/' },
+    ]) {
+      const response = await patchJob(handle.port, token, body);
+      assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+    }
+
+    assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('keeps a migrated fixture startUrl when startUrl is not supplied', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/dummy-bill.html';
+    await store.upsertJob(
+      canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }),
+    );
+
+    const response = await patchJob(handle.port, token, { enabled: false });
+    assert.equal(response.status, 200);
+    const patched = (await response.json()) as JobDocument;
+    assert.equal(patched.enabled, false);
+    assert.equal(patched.startUrl, fixtureUrl);
+    assert.equal((await store.getJob('home-eb'))?.startUrl, fixtureUrl);
+  });
+
+  it('accepts a public startUrl and stores it', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(canonicalAdapterJob({ userId: user.id }));
+
+    const response = await patchJob(handle.port, token, {
+      startUrl: 'https://www.tnebnet.org/awp/login2',
+    });
+    assert.equal(response.status, 200);
+    assert.equal(
+      (await store.getJob('home-eb'))?.startUrl,
+      'https://www.tnebnet.org/awp/login2',
+    );
+  });
+
+  it('ignores client attempts to set secretIds, lastResult, or timestamps', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(
+      canonicalAdapterJob({
+        userId: user.id,
+        secretIds: ['secret-owned'],
+        lastResult: { amount: 10 },
+        createdAt: '2020-01-01T00:00:00.000Z',
+      }),
+    );
+
+    const response = await patchJob(handle.port, token, {
+      secretIds: ['injected-secret'],
+      lastResult: { amount: 999999 },
+      createdAt: '1999-01-01T00:00:00.000Z',
+      userId: 'someone-else',
+    });
+    assert.equal(response.status, 200);
+
+    const stored = await store.getJob('home-eb');
+    assert.deepEqual(stored?.secretIds, ['secret-owned']);
+    assert.deepEqual(stored?.lastResult, { amount: 10 });
+    assert.equal(stored?.createdAt, '2020-01-01T00:00:00.000Z');
+    assert.equal(stored?.userId, user.id);
+  });
+
+  it('ignores client-supplied secretIds and lastResult on create', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'injected',
+          secretIds: ['injected-secret'],
+          lastResult: { amount: 999999 },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.secretIds, []);
+    assert.equal(created.lastResult, null);
+  });
+});
+
 describe('runs expose the generic result', () => {
   it('returns result and never billSummary or provider', async () => {
     const store = new MemoryStore();
@@ -1239,6 +1570,67 @@ describe('job secrets api', () => {
 
     const arrayValues = await putSecrets(handle.port, token, ['password']);
     assert.equal(arrayValues.status, 400);
+  });
+
+  it('answers a malformed JSON body with a fixed message that echoes nothing', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    const response = await fetch(secretsUrl(handle.port), {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: '{"values": {"password": "hunter2"',
+    });
+
+    assert.equal(response.status, 400);
+    const text = await response.text();
+    assert.equal(text.includes('hunter2'), false);
+    assert.equal(text.includes('password'), false);
+    assert.deepEqual(JSON.parse(text), { error: 'Invalid request body' });
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
+    );
+  });
+
+  it('keeps one user two jobs isolated from each other', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+    await store.upsertJob(
+      canonicalAdapterJob({ id: 'second-job', userId: user.id }),
+    );
+
+    await putSecrets(handle.port, token, { password: 'first-job-password' });
+
+    const otherJobKeys = await fetch(secretsUrl(handle.port, 'second-job'), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(otherJobKeys.status, 200);
+    assert.deepEqual(await otherJobKeys.json(), { keys: [] });
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'second-job' })).length,
+      0,
+    );
+
+    const secondPut = await putSecrets(
+      handle.port,
+      token,
+      { password: 'second-job-password' },
+      'second-job',
+    );
+    assert.equal(secondPut.status, 200);
+
+    const first = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    const second = await store.listSecrets({ userId: user.id, jobId: 'second-job' });
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
+    assert.notEqual(first[0]?.id, second[0]?.id);
+    const masterKey = parseMasterKey(TEST_ENV);
+    assert.equal(decryptSecret(first[0]!, masterKey), 'first-job-password');
+    assert.equal(decryptSecret(second[0]!, masterKey), 'second-job-password');
+    assert.deepEqual((await store.getJob('home-eb'))?.secretIds, [first[0]?.id]);
+    assert.deepEqual((await store.getJob('second-job'))?.secretIds, [second[0]?.id]);
   });
 
   it('returns 404 for a missing job', async () => {

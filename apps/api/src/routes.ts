@@ -47,6 +47,11 @@ function sendJson(res: ServerResponse, statusCode: number, payload: unknown): vo
   res.end(JSON.stringify(payload));
 }
 
+/**
+ * Parses the request body. A parse failure always raises the same fixed
+ * message: `JSON.parse` puts the offending snippet in its own message, which
+ * for `/jobs/:id/secrets` would reflect a plaintext secret back to the caller.
+ */
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -54,7 +59,11 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   const text = Buffer.concat(chunks).toString('utf8');
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ConfigError('Invalid request body');
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -86,38 +95,27 @@ function defaultJobDocument(userId: string): JobDocument {
   };
 }
 
+/**
+ * Fills in the fields the caller omitted and passes everything else through
+ * untouched, so `assertJobDocument` can reject a malformed supplied value
+ * rather than this function silently swapping in a default.
+ */
 function coerceNotify(
   payload: Record<string, unknown>,
   fallback: JobDocument['notify'],
-): JobDocument['notify'] {
+): Record<string, unknown> {
+  if (payload.notify === undefined) {
+    return { ...fallback };
+  }
   if (!isObject(payload.notify)) {
-    return fallback;
+    throw new ConfigError('job.notify must be an object');
   }
   const notify = payload.notify;
-  const title = typeof notify.title === 'string' ? notify.title : fallback.title;
-  const on =
-    notify.on === 'always' ||
-    notify.on === 'change' ||
-    notify.on === 'drop' ||
-    notify.on === 'failure_only'
-      ? notify.on
-      : fallback.on;
-  let channel = fallback.channel;
-  if (isObject(notify.channel)) {
-    const rawChannel = notify.channel;
-    if (rawChannel.type === 'ntfy' && typeof rawChannel.topic === 'string') {
-      channel = {
-        type: 'ntfy',
-        topic: rawChannel.topic,
-        ...(typeof rawChannel.baseUrl === 'string'
-          ? { baseUrl: rawChannel.baseUrl }
-          : {}),
-      };
-    } else if (rawChannel.type === 'webhook' && typeof rawChannel.url === 'string') {
-      channel = { type: 'webhook', url: rawChannel.url };
-    }
-  }
-  return { title, on, channel };
+  return {
+    title: notify.title === undefined ? fallback.title : notify.title,
+    on: notify.on === undefined ? fallback.on : notify.on,
+    channel: notify.channel === undefined ? fallback.channel : notify.channel,
+  };
 }
 
 function coerceJobDocument(
@@ -132,39 +130,34 @@ function coerceJobDocument(
   // `provider` is the pre-generic-jobs spelling of `adapterId`; still accepted
   // on the wire so older clients keep working, never stored or returned.
   const adapterId =
-    typeof payload.adapterId === 'string'
+    payload.adapterId !== undefined
       ? payload.adapterId
-      : typeof payload.provider === 'string'
+      : payload.provider !== undefined
         ? payload.provider
         : base.adapterId;
 
   const notify = coerceNotify(payload, base.notify);
-  const name =
-    typeof payload.name === 'string' && payload.name
-      ? payload.name
-      : notify.title || base.name;
+  const fallbackName =
+    base.name || (typeof notify.title === 'string' ? notify.title : '');
 
   const job = assertJobDocument({
-    id: typeof payload.id === 'string' ? payload.id : base.id,
+    id: payload.id === undefined ? base.id : payload.id,
     userId,
-    name,
-    enabled: typeof payload.enabled === 'boolean' ? payload.enabled : base.enabled,
-    schedule:
-      payload.schedule === null || typeof payload.schedule === 'string'
-        ? payload.schedule
-        : base.schedule,
-    startUrl: typeof payload.startUrl === 'string' ? payload.startUrl : base.startUrl,
+    name: payload.name === undefined ? fallbackName : payload.name,
+    enabled: payload.enabled === undefined ? base.enabled : payload.enabled,
+    schedule: payload.schedule === undefined ? base.schedule : payload.schedule,
+    startUrl: payload.startUrl === undefined ? base.startUrl : payload.startUrl,
     engine: payload.engine === undefined ? base.engine : payload.engine,
     ...(adapterId === undefined ? {} : { adapterId }),
-    goal: typeof payload.goal === 'string' ? payload.goal : base.goal,
+    goal: payload.goal === undefined ? base.goal : payload.goal,
     schema: payload.schema === undefined ? base.schema : payload.schema,
     workflow: payload.workflow === undefined ? base.workflow : payload.workflow,
-    // Owned by PUT /jobs/:id/secrets and the worker respectively.
+    // Server-owned: secrets belong to PUT /jobs/:id/secrets, the result and the
+    // timestamps to the worker and to this handler.
     secretIds: base.secretIds,
     notify,
     lastResult: base.lastResult,
-    createdAt:
-      typeof payload.createdAt === 'string' ? payload.createdAt : base.createdAt,
+    createdAt: base.createdAt,
     updatedAt: now,
   });
 
@@ -176,6 +169,19 @@ function coerceJobDocument(
   if (job.id.includes('/')) {
     throw new ConfigError('job.id must not contain "/"');
   }
+
+  // SSRF: only what the caller actually sent is checked. A migrated adapter job
+  // whose stored `startUrl` is a `file://` fixture stays editable as long as the
+  // caller does not send a new one; a caller-supplied `file://` is rejected.
+  if (typeof payload.startUrl === 'string' && payload.startUrl.length > 0) {
+    assertPublicHttpUrl(job.startUrl);
+  }
+  const channelSupplied =
+    isObject(payload.notify) && payload.notify.channel !== undefined;
+  if (channelSupplied && job.notify.channel.type === 'webhook') {
+    assertPublicHttpUrl(job.notify.channel.url);
+  }
+
   return job;
 }
 
@@ -429,12 +435,19 @@ async function handleLogin(
   res: ServerResponse,
   ctx: RouteContext,
 ): Promise<void> {
-  const body = await readJsonBody(req);
-  const email = isObject(body) && typeof body.email === 'string' ? body.email.toLowerCase() : '';
-  const password = isObject(body) && typeof body.password === 'string' ? body.password : '';
-
   const invalidCredentials = () =>
     sendJson(res, 401, { error: 'Invalid email or password' });
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    // A parse error message would quote the body, password included.
+    invalidCredentials();
+    return;
+  }
+  const email = isObject(body) && typeof body.email === 'string' ? body.email.toLowerCase() : '';
+  const password = isObject(body) && typeof body.password === 'string' ? body.password : '';
 
   if (!email || !password) {
     invalidCredentials();
@@ -567,10 +580,9 @@ export async function handleRoute(
   }
 
   if (method === 'POST' && pathname === '/jobs') {
-    const body = await readJsonBody(req);
     let job: JobDocument;
     try {
-      job = coerceJobDocument(body, user.userId);
+      job = coerceJobDocument(await readJsonBody(req), user.userId);
     } catch (error) {
       sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
       return;
@@ -588,15 +600,14 @@ export async function handleRoute(
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
-    const body = await readJsonBody(req);
-    const patch = isObject(body) ? body : {};
     let merged: JobDocument;
     try {
-      merged = coerceJobDocument(
-        { ...existing, ...patch, id: jobId },
-        existing.userId,
-        existing,
-      );
+      const body = await readJsonBody(req);
+      const patch = isObject(body) ? body : {};
+      // The patch is applied against `existing` as the fallback rather than
+      // spread over it, so an omitted field stays omitted and only what the
+      // caller supplied is validated.
+      merged = coerceJobDocument({ ...patch, id: jobId }, existing.userId, existing);
     } catch (error) {
       sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
       return;

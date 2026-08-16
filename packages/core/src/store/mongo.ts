@@ -1,6 +1,7 @@
 import { MongoClient } from 'mongodb';
 import { ConfigError } from '../errors.js';
 import { assertJobDocument } from './assert-job.js';
+import { ensureStoreIndexes } from './indexes.js';
 import type {
   BillingStore,
   JobDocument,
@@ -406,17 +407,15 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   const users = db.collection<UserDocument>('users');
   const watches = db.collection<WatchDocument>('watches');
   const priceChecks = db.collection<PriceCheckDocument>('price_checks');
-  await users.createIndex({ email: 1 }, { unique: true });
-  await watches.createIndex({ userId: 1 });
-  await priceChecks.createIndex({ watchId: 1 });
-  await priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
+  const secrets = db.collection<SecretDocument>('secrets');
+  await ensureStoreIndexes({ users, watches, priceChecks, secrets });
   return createBillingStoreFromCollections(
     {
       jobs: db.collection('jobs') as unknown as CollectionLike<Record<string, unknown>>,
       settings: db.collection<SettingsDocument>('settings'),
       overlays: db.collection<OverlayDocument>('learned_overlays'),
       runs: db.collection('runs') as unknown as CollectionLike<Record<string, unknown>>,
-      secrets: db.collection<SecretDocument>('secrets'),
+      secrets,
       watches,
       priceChecks,
       users,

@@ -8,7 +8,7 @@ The app is organized into hubs under a router shell:
 
 - `/login` - public email/password login (JWT stored in `sessionStorage`)
 - `/jobs` - list jobs, run now, edit, soft-disable/enable
-- `/jobs/new` - create job
+- `/jobs/new` - points at chat, which is where new jobs are created
 - `/jobs/:jobId` - edit job
 - `/runs` - list/filter runs
 - `/runs/:runId` - run detail with polling while status is `running`
@@ -20,7 +20,11 @@ Notes:
 - Schedules are shown in humanized form in tables, but edited as raw cron in forms.
 - Empty schedule means manual-only (`null` in API payloads).
 - Job disable is soft-disable only (`DELETE /jobs/:id` sets `enabled: false`).
-- Credentials are env **names** only (`credentialsEnv`), never secret values.
+- Secrets are write-only: `GET /jobs/:id/secrets` returns key names with a `set`
+  flag, and `PUT /jobs/:id/secrets` sends new values. Stored values are
+  encrypted server-side and are never sent back to the browser.
+- A job's engine (`adapter:<id>` or `workflow`) is shown read-only; it is chosen
+  when the job is created.
 - `Run` calls `POST /jobs/:id/run` and navigates to the created run detail.
 - The run trigger requires the worker daemon API (`billing-agent daemon`) with `onRunJob` wiring.
 

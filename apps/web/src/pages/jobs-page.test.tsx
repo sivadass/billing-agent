@@ -87,6 +87,20 @@ describe('JobsPage', () => {
     expect(await screen.findByText('Run detail route: run-123')).toBeInTheDocument();
   });
 
+  it('offers no create CTA now that jobs come from chat', async () => {
+    render(
+      <MemoryRouter initialEntries={['/jobs']}>
+        <Routes>
+          <Route path="/jobs" element={<JobsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Engine');
+    expect(screen.queryByRole('button', { name: /new job/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/new job/i)).not.toBeInTheDocument();
+  });
+
   it('shows an Engine column instead of Provider', async () => {
     render(
       <MemoryRouter initialEntries={['/jobs']}>
