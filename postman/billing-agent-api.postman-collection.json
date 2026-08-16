@@ -123,10 +123,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"id\": \"shoe-price\",\n  \"name\": \"Shoe price\",\n  \"engine\": \"workflow\",\n  \"startUrl\": \"https://sivadass.in/\",\n  \"goal\": \"Read the listed price\",\n  \"schema\": [{ \"name\": \"price\", \"type\": \"number\" }],\n  \"workflow\": [{ \"id\": \"open\", \"type\": \"goto\", \"url\": \"https://sivadass.in/\" }],\n  \"notify\": { \"title\": \"Shoe price\" }\n}"
+              "raw": "{\n  \"id\": \"shoe-price\",\n  \"name\": \"Shoe price\",\n  \"engine\": \"workflow\",\n  \"startUrl\": \"https://sivadass.in/\",\n  \"goal\": \"Read the listed price\",\n  \"schema\": [{ \"key\": \"price\", \"label\": \"Price\", \"type\": \"price\" }],\n  \"workflow\": [\n    { \"id\": \"open\", \"type\": \"goto\", \"url\": \"https://sivadass.in/\" },\n    {\n      \"id\": \"read-price\",\n      \"type\": \"extract\",\n      \"fields\": [\n        { \"key\": \"price\", \"selector\": \".product-price\", \"strategy\": \"price\" }\n      ]\n    }\n  ],\n  \"notify\": { \"title\": \"Shoe price\" }\n}"
             },
             "url": "{{baseUrl}}/jobs",
-            "description": "A workflow job must supply a public http(s) `startUrl`."
+            "description": "A workflow job must supply a public http(s) startUrl. Schema entries are {key, label, type} with type one of string|number|price|date; extract step fields are {key, selector?, strategy?} with strategy one of text|price|json_ld|shopify_json."
           }
         },
         {

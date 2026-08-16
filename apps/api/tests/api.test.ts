@@ -1051,6 +1051,101 @@ describe('startUrl is required where the engine needs it', () => {
     assert.equal(created.startUrl, 'https://sivadass.in/');
   });
 
+  it('rejects a PATCH switching an adapter job to workflow without a startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const original = canonicalAdapterJob({ userId: user.id, startUrl: '' });
+    await store.upsertJob(original);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        engine: 'workflow',
+        workflow: [{ id: 'open', type: 'goto', url: 'https://sivadass.in/' }],
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('rejects a PATCH switching to workflow while inheriting a file:// startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/dummy-bill.html';
+    const original = canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl });
+    await store.upsertJob(original);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ engine: 'workflow' }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('allows a PATCH to workflow when a public startUrl comes with it', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(
+      canonicalAdapterJob({
+        userId: user.id,
+        startUrl: 'file:///workspace/fixtures/dummy-bill.html',
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        engine: 'workflow',
+        startUrl: 'https://sivadass.in/',
+        workflow: [{ id: 'open', type: 'goto', url: 'https://sivadass.in/' }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const patched = (await response.json()) as JobDocument;
+    assert.equal(patched.engine, 'workflow');
+    assert.equal(patched.startUrl, 'https://sivadass.in/');
+  });
+
+  it('keeps editing a workflow job whose startUrl is not resupplied', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/shop.html';
+    await store.upsertJob({
+      ...canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }),
+      engine: 'workflow',
+      adapterId: undefined,
+      workflow: [{ id: 'open', type: 'goto', url: fixtureUrl }],
+    } as JobDocument);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal((await store.getJob('home-eb'))?.startUrl, fixtureUrl);
+  });
+
   it('still creates an adapter job without a startUrl', async () => {
     const { handle, token } = await setupAuthedServer();
 
@@ -1070,6 +1165,94 @@ describe('startUrl is required where the engine needs it', () => {
 
     assert.equal(response.status, 201);
     assert.equal(((await response.json()) as JobDocument).startUrl, '');
+  });
+});
+
+describe('the documented create-job examples match the API contract', () => {
+  // Kept byte-for-byte in step with the payloads in the root README and the
+  // Postman collection; a drift here means the docs tell callers a lie.
+  const adapterExample = {
+    id: 'smoke-test',
+    name: 'Dummy Bill',
+    engine: 'adapter',
+    adapterId: 'dummy',
+    enabled: true,
+    schedule: null,
+    notify: {
+      title: 'Dummy Bill',
+      on: 'always',
+      channel: { type: 'ntfy', topic: 'bills' },
+    },
+  };
+
+  const workflowExample = {
+    id: 'shoe-price',
+    name: 'Shoe price',
+    engine: 'workflow',
+    startUrl: 'https://sivadass.in/',
+    goal: 'Read the listed price',
+    schema: [{ key: 'price', label: 'Price', type: 'price' }],
+    workflow: [
+      { id: 'open', type: 'goto', url: 'https://sivadass.in/' },
+      {
+        id: 'read-price',
+        type: 'extract',
+        fields: [{ key: 'price', selector: '.product-price', strategy: 'price' }],
+      },
+    ],
+    notify: { title: 'Shoe price' },
+  };
+
+  async function post(
+    port: number,
+    token: string,
+    payload: Record<string, unknown>,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it('accepts the documented adapter example', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await post(handle.port, token, adapterExample);
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'adapter');
+    assert.equal(created.adapterId, 'dummy');
+  });
+
+  it('accepts the documented workflow example', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await post(handle.port, token, workflowExample);
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'workflow');
+    assert.equal(created.startUrl, 'https://sivadass.in/');
+    assert.deepEqual(created.schema, [
+      { key: 'price', label: 'Price', type: 'price' },
+    ]);
+    assert.equal(created.workflow.length, 2);
+  });
+
+  it('rejects the schema shape the docs used to show', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await post(handle.port, token, {
+      ...workflowExample,
+      schema: [{ name: 'price', type: 'number' }],
+    });
+
+    assert.equal(response.status, 400);
   });
 });
 

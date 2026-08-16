@@ -217,11 +217,32 @@ curl -X POST http://localhost:8080/jobs \
     "engine": "workflow",
     "startUrl": "https://sivadass.in/",
     "goal": "Read the listed price",
-    "schema": [{ "name": "price", "type": "number" }],
-    "workflow": [{ "id": "open", "type": "goto", "url": "https://sivadass.in/" }],
+    "schema": [{ "key": "price", "label": "Price", "type": "price" }],
+    "workflow": [
+      { "id": "open", "type": "goto", "url": "https://sivadass.in/" },
+      {
+        "id": "read-price",
+        "type": "extract",
+        "fields": [
+          { "key": "price", "selector": ".product-price", "strategy": "price" }
+        ]
+      }
+    ],
     "notify": { "title": "Shoe price" }
   }'
 ```
+
+Shapes used above:
+
+- `schema` entries are `{ key, label, type }`, where `type` is one of `string`,
+  `number`, `price`, `date`. They describe the `result` a run produces.
+- `workflow` steps are `{ id, type, ... }`: `goto` takes `url`, `fill` takes
+  `selector` plus `source` (`secret` with a `secretKey`, or `literal` with a
+  `value`), `click` and `assert` take `selector`, `wait` takes an optional
+  `selector` / `timeoutMs`, `solve_captcha` takes `imageSelector` /
+  `inputSelector`, and `extract` takes `fields` of
+  `{ key, selector?, strategy? }` with `strategy` one of `text`, `price`,
+  `json_ld`, `shopify_json`.
 
 Notes on the payload:
 

@@ -182,9 +182,18 @@ function coerceJobDocument(
       throw new ConfigError('job.startUrl must not be cleared');
     }
   }
-  // Adapters carry their own start URL, so only a workflow needs one supplied.
-  if (!fallback && job.engine === 'workflow' && !job.startUrl) {
-    throw new ConfigError('job.startUrl is required for a workflow job');
+  // Adapters carry their own start URL, so only a workflow needs one.
+  if (job.engine === 'workflow') {
+    if (!job.startUrl) {
+      throw new ConfigError('job.startUrl is required for a workflow job');
+    }
+    // Becoming a workflow re-opens the question of where the job navigates, so
+    // an inherited URL is checked too — otherwise flipping the engine would be
+    // a way to promote a migrated `file://` fixture URL into a workflow job.
+    // A job that was already a workflow keeps its stored URL untouched.
+    if (!fallback || fallback.engine !== 'workflow') {
+      assertPublicHttpUrl(job.startUrl);
+    }
   }
 
   const channelSupplied =
