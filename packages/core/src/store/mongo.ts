@@ -190,6 +190,12 @@ export function createBillingStoreFromCollections(
       return job ? coerceLegacyJob(job) : null;
     },
 
+    /** See `BillingStore.listRawJobDocuments` — deliberately bypasses `coerceLegacyJob`. */
+    async listRawJobDocuments() {
+      const jobs = await collections.jobs.find({}).toArray();
+      return jobs.map((job) => ({ ...job }));
+    },
+
     async upsertJob(job) {
       await collections.jobs.updateOne({ id: job.id }, { $set: job }, { upsert: true });
     },

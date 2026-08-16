@@ -150,6 +150,23 @@ export interface BillingStore {
   getSettings(): Promise<SettingsDocument>;
   listJobs(options?: { userId?: string }): Promise<JobDocument[]>;
   getJob(id: string): Promise<JobDocument | null>;
+  /**
+   * Migration-only escape hatch: every job document exactly as persisted,
+   * with **no** legacy-compatibility coercion applied (unlike `listJobs`,
+   * which always runs raw Mongo documents through `coerceLegacyJob`, so a
+   * legacy `{ provider, credentialsEnv }` job always reads back with
+   * `engine`/`adapterId` already set and `provider`/`credentialsEnv`
+   * stripped). `migrateGenericJobs` needs this to (a) tell a genuinely
+   * already-migrated job apart from `coerceLegacyJob`'s read-time shim, and
+   * (b) recover `provider` / `credentialsEnv` to encrypt into `secrets`.
+   * Never used by ordinary reads (API, job-runner, scheduler) — those keep
+   * using `listJobs` / `getJob` unchanged.
+   *
+   * Optional: omit when `listJobs()` already returns documents with no
+   * hidden/coerced fields (e.g. a plain in-memory test store) — callers
+   * should fall back to `listJobs()` in that case.
+   */
+  listRawJobDocuments?(): Promise<Record<string, unknown>[]>;
   upsertJob(job: JobDocument): Promise<void>;
   upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void>;
   upsertSecret(secret: SecretDocument): Promise<void>;

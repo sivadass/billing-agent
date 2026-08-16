@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ConfigError } from '../src/errors.ts';
 import { migrateGenericJobs } from '../src/migrate-generic-jobs.ts';
 import { decryptSecret, parseMasterKey } from '../src/secrets.ts';
+import { createBillingStoreFromCollections } from '../src/store/mongo.ts';
 import type {
   BillingStore,
   JobDocument,
@@ -356,6 +358,49 @@ describe('migrateGenericJobs', () => {
     assert.ok(!serialized.includes('credentialsEnv'));
   });
 
+  it('fails fast with ConfigError naming the missing env var, without leaking values, and migrates nothing for that job', async () => {
+    const store = new FakeBillingStore();
+    store.jobs.push(legacyTnpdclJob());
+    const env = { ...baseEnv() };
+    delete env.TNPDCL_PASSWORD;
+
+    await assert.rejects(
+      () => migrateGenericJobs({ store, env, now: NOW }),
+      (error: unknown) => {
+        assert.ok(error instanceof ConfigError);
+        assert.ok(error.message.includes('TNPDCL_PASSWORD'));
+        assert.ok(!error.message.includes('hunter2'));
+        assert.ok(!error.message.includes('alice'));
+        return true;
+      },
+    );
+
+    // No partial migration: the job is untouched (still the raw legacy shape,
+    // no `engine`) and no secret rows were orphaned (not even the username
+    // secret, whose env var *was* present).
+    const job = await store.getJob('home-eb');
+    assert.deepEqual(job, legacyTnpdclJob() as unknown as JobDocument);
+    assert.deepEqual(
+      await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' }),
+      [],
+    );
+  });
+
+  it('fails fast with ConfigError when a credentialsEnv value is an empty string', async () => {
+    const store = new FakeBillingStore();
+    store.jobs.push(legacyTnpdclJob());
+    const env = { ...baseEnv(), TNPDCL_PASSWORD: '' };
+
+    await assert.rejects(
+      () => migrateGenericJobs({ store, env, now: NOW }),
+      (error: unknown) => {
+        assert.ok(error instanceof ConfigError);
+        assert.ok(error.message.includes('TNPDCL_PASSWORD'));
+        return true;
+      },
+    );
+  });
+
   it('migrates a legacy watch into a deterministic workflow job', async () => {
     const store = new FakeBillingStore();
     store.watches.push(legacyWatch());
@@ -551,6 +596,151 @@ describe('migrateGenericJobs', () => {
     assert.equal(
       (await store.listPriceChecks({ watchId: 'craft-glory-old-skool-vb' })).length,
       1,
+    );
+  });
+});
+
+/**
+ * Minimal in-memory Mongo `Collection` double, matching the shape
+ * `createBillingStoreFromCollections` (packages/core/src/store/mongo.ts)
+ * expects. Copied (not imported) from `store-mongo.test.ts` — it isn't
+ * exported there and duplicating a ~40-line test double is cheaper than
+ * introducing shared test infra for one extra spec file.
+ */
+type Query<T> = Partial<{ [K in keyof T]: T[K] }>;
+
+class MemoryCollection<T extends Record<string, unknown>> {
+  #rows: T[] = [];
+
+  async findOne(query: Query<T>): Promise<T | null> {
+    return this.#rows.find((row) => this.#matches(row, query)) ?? null;
+  }
+
+  find(query: Query<T> = {}) {
+    const rows = this.#rows.filter((row) => this.#matches(row, query));
+    return {
+      toArray: async () => [...rows],
+    };
+  }
+
+  async insertOne(doc: T): Promise<void> {
+    this.#rows.push({ ...doc });
+  }
+
+  async updateOne(
+    filter: Query<T>,
+    update: { $set?: Partial<T>; $setOnInsert?: Partial<T> },
+    options?: { upsert?: boolean },
+  ): Promise<void> {
+    const existing = this.#rows.find((row) => this.#matches(row, filter));
+    if (!existing) {
+      if (!options?.upsert) return;
+      this.#rows.push({
+        ...(update.$setOnInsert ?? {}),
+        ...(update.$set ?? {}),
+      } as T);
+      return;
+    }
+    if (update.$set) Object.assign(existing, update.$set);
+  }
+
+  async updateMany(filter: Query<T>, update: { $set: Partial<T> }): Promise<void> {
+    for (const row of this.#rows) {
+      if (this.#matches(row, filter)) Object.assign(row, update.$set);
+    }
+  }
+
+  async deleteOne(filter: Query<T>): Promise<void> {
+    const index = this.#rows.findIndex((row) => this.#matches(row, filter));
+    if (index >= 0) this.#rows.splice(index, 1);
+  }
+
+  async deleteMany(filter: Query<T>): Promise<void> {
+    this.#rows = this.#rows.filter((row) => !this.#matches(row, filter));
+  }
+
+  #matches(row: T, query: Query<T>): boolean {
+    return Object.entries(query).every(([key, value]) => row[key as keyof T] === value);
+  }
+}
+
+function buildMongoLikeStore(): {
+  store: BillingStore;
+  jobsCollection: MemoryCollection<Record<string, unknown>>;
+} {
+  const jobsCollection = new MemoryCollection<Record<string, unknown>>();
+  const store = createBillingStoreFromCollections(
+    {
+      jobs: jobsCollection,
+      settings: new MemoryCollection<SettingsDocument>(),
+      overlays: new MemoryCollection<OverlayDocument>(),
+      runs: new MemoryCollection<Record<string, unknown>>(),
+      secrets: new MemoryCollection<SecretDocument>(),
+      watches: new MemoryCollection<WatchDocument>(),
+      priceChecks: new MemoryCollection<PriceCheckDocument>(),
+      users: new MemoryCollection<UserDocument>(),
+    },
+    async () => {},
+  );
+  return { store, jobsCollection };
+}
+
+describe('migrateGenericJobs against a real createBillingStoreFromCollections store', () => {
+  it('sees the raw legacy job (bypassing coerceLegacyJob), persists engine/adapterId, encrypts credentials, and is idempotent — while ordinary listJobs/getJob keep coercing', async () => {
+    const { store, jobsCollection } = buildMongoLikeStore();
+    await store.upsertSettings({
+      ntfy: { baseUrl: 'https://ntfy.sh', topicEnv: 'NTFY_TOPIC', priority: 'default' },
+      mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
+      browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
+      jobsGeneration: 0,
+    });
+    // Inserted directly into the raw collection, exactly like real legacy
+    // Mongo data: no `engine`, has `provider` / `credentialsEnv`.
+    await jobsCollection.insertOne(legacyTnpdclJob());
+    const env = baseEnv();
+
+    // Ordinary reads must still coerce, unchanged from Task 1.
+    const coerced = await store.listJobs();
+    assert.equal(coerced.length, 1);
+    assert.equal(coerced[0].engine, 'adapter');
+    assert.equal(coerced[0].adapterId, 'tnpdcl');
+    assert.equal(coerced[0].startUrl, '');
+    assert.deepEqual(coerced[0].secretIds, []);
+    assert.equal(
+      (coerced[0] as unknown as { credentialsEnv?: unknown }).credentialsEnv,
+      undefined,
+    );
+
+    const first = await migrateGenericJobs({ store, env, now: NOW });
+    assert.deepEqual(first, { jobsMigrated: 1, watchesMigrated: 0, runsMigrated: 0 });
+
+    // The underlying raw document was actually rewritten (not just coerced on read).
+    const rawAfter = await jobsCollection.findOne({ id: 'home-eb' });
+    assert.ok(rawAfter);
+    assert.equal(rawAfter.engine, 'adapter');
+    assert.equal(rawAfter.adapterId, 'tnpdcl');
+    assert.equal(rawAfter.startUrl, 'https://www.tnebnet.org/awp/login');
+    assert.equal((rawAfter.secretIds as string[]).length, 2);
+
+    const secrets = await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' });
+    assert.equal(secrets.length, 2);
+    const key = parseMasterKey(env);
+    const username = secrets.find((secret) => secret.key === 'username');
+    const password = secrets.find((secret) => secret.key === 'password');
+    assert.equal(decryptSecret(username as SecretDocument, key), 'alice');
+    assert.equal(decryptSecret(password as SecretDocument, key), 'hunter2');
+
+    // Ordinary getJob now returns the fully-migrated shape too (assertJobDocument
+    // path, since the raw doc genuinely has `engine` now).
+    const readBack = await store.getJob('home-eb');
+    assert.equal(readBack?.engine, 'adapter');
+    assert.equal(readBack?.startUrl, 'https://www.tnebnet.org/awp/login');
+
+    const second = await migrateGenericJobs({ store, env, now: NOW });
+    assert.deepEqual(second, { jobsMigrated: 0, watchesMigrated: 0, runsMigrated: 0 });
+    assert.equal(
+      (await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' })).length,
+      2,
     );
   });
 });

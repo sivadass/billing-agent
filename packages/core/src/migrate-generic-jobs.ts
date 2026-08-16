@@ -66,6 +66,23 @@ function isUnmigratedJob(raw: unknown): raw is LegacyBillingJobDoc {
   return typeof job.engine !== 'string';
 }
 
+/**
+ * Prefers the migration-only `listRawJobDocuments` (uncoerced) so a real
+ * Mongo-backed store's legacy `{ provider, credentialsEnv }` jobs are
+ * visible as-is. Falls back to `listJobs()` for stores that don't implement
+ * it — safe only because those stores (e.g. a plain in-memory test double)
+ * don't apply any read-time coercion in the first place, so `listJobs()`
+ * already returns raw documents.
+ */
+async function fetchRawJobDocuments(
+  store: BillingStore,
+): Promise<Record<string, unknown>[]> {
+  if (store.listRawJobDocuments) {
+    return store.listRawJobDocuments();
+  }
+  return (await store.listJobs()) as unknown as Record<string, unknown>[];
+}
+
 function isMigratedJob(raw: JobDocument | null): boolean {
   return raw !== null && typeof (raw as unknown as Record<string, unknown>).engine === 'string';
 }
@@ -118,11 +135,24 @@ async function migrateBillingJob(
   }
 
   const userId = typeof raw.userId === 'string' ? raw.userId : '';
-  const secretIds: string[] = [];
+  const credentialsEnv = Object.entries(raw.credentialsEnv ?? {});
 
-  for (const [fieldKey, envName] of Object.entries(raw.credentialsEnv ?? {})) {
+  // Validate every referenced env var resolves *before* touching the store,
+  // so a job with a missing/empty credential never partially migrates (no
+  // orphan secret rows, no job persisted with `engine` set but credentials
+  // it can't actually run with). The error names the env var, never a value.
+  for (const [fieldKey, envName] of credentialsEnv) {
     const value = ctx.env[envName];
-    if (!value) continue;
+    if (!value) {
+      throw new ConfigError(
+        `Missing environment variable "${envName}" (job "${raw.id}" credentialsEnv.${fieldKey}); cannot migrate this job's credentials`,
+      );
+    }
+  }
+
+  const secretIds: string[] = [];
+  for (const [fieldKey, envName] of credentialsEnv) {
+    const value = ctx.env[envName] as string;
     const { ciphertext, iv, tag } = encryptSecret(value, ctx.getMasterKey());
     const secret: SecretDocument = {
       id: randomUUID(),
@@ -290,7 +320,7 @@ export async function migrateGenericJobs(input: {
   };
 
   let jobsMigrated = 0;
-  for (const job of await store.listJobs()) {
+  for (const job of await fetchRawJobDocuments(store)) {
     if (!isUnmigratedJob(job)) continue;
     await migrateBillingJob(job, ctx);
     jobsMigrated += 1;
