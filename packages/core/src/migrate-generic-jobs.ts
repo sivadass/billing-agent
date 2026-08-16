@@ -1,0 +1,328 @@
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { ConfigError } from './errors.js';
+import { encryptSecret, parseMasterKey } from './secrets.js';
+import type {
+  BillingStore,
+  ExtractField,
+  JobDocument,
+  PriceCheckDocument,
+  RunDocument,
+  SecretDocument,
+  SettingsDocument,
+  WatchDocument,
+} from './store/types.js';
+import type { WorkflowStep } from './workflow/types.js';
+
+export type MigrateGenericJobsResult = {
+  jobsMigrated: number;
+  watchesMigrated: number;
+  runsMigrated: number;
+};
+
+type LegacyBillingJobDoc = {
+  id: string;
+  userId?: unknown;
+  provider: string;
+  enabled?: unknown;
+  schedule?: unknown;
+  credentialsEnv?: Record<string, string>;
+  notify?: { title?: string };
+};
+
+/**
+ * Locked TNPDCL login URL (see `adapters/tnpdcl.ts`). Dummy's default fixture
+ * path mirrors `adapters/dummy.ts`'s own fallback so a migrated dummy job
+ * points at the same `file://` URL the adapter would use with no
+ * `fixturePath` override.
+ */
+const TNPDCL_START_URL = 'https://www.tnebnet.org/awp/login';
+const DUMMY_START_URL = pathToFileURL(
+  resolve(process.cwd(), 'fixtures/dummy-bill.html'),
+).href;
+
+const ADAPTER_START_URLS: Record<string, string> = {
+  tnpdcl: TNPDCL_START_URL,
+  dummy: DUMMY_START_URL,
+};
+
+/** Spec: "schema ← amount, dueDate, billPeriod, status, accountLabel". */
+const ADAPTER_SCHEMA: ExtractField[] = [
+  { key: 'amount', label: 'Amount', type: 'price' },
+  { key: 'dueDate', label: 'Due Date', type: 'date' },
+  { key: 'billPeriod', label: 'Bill Period', type: 'string' },
+  { key: 'status', label: 'Status', type: 'string' },
+  { key: 'accountLabel', label: 'Account', type: 'string' },
+];
+
+const WATCH_SCHEMA: ExtractField[] = [
+  { key: 'price', label: 'Price', type: 'price' },
+  { key: 'currency', label: 'Currency', type: 'string' },
+];
+
+function isUnmigratedJob(raw: unknown): raw is LegacyBillingJobDoc {
+  const job = raw as Record<string, unknown>;
+  return typeof job.engine !== 'string';
+}
+
+function isMigratedJob(raw: JobDocument | null): boolean {
+  return raw !== null && typeof (raw as unknown as Record<string, unknown>).engine === 'string';
+}
+
+/**
+ * Best-effort resolution of the "current resolved global topic" for the
+ * migration mapping. Unlike `config.ts`'s `resolveNtfyTopic`, this never
+ * throws — an unresolved topic just becomes `''`, which the job runner
+ * already falls back to `settings.ntfy` / `NTFY_TOPIC` for at run time.
+ */
+function resolveGlobalNtfyTopic(
+  ntfy: SettingsDocument['ntfy'],
+  env: NodeJS.ProcessEnv,
+): string {
+  if (ntfy.topicEnv) {
+    const fromTopicEnv = env[ntfy.topicEnv];
+    if (fromTopicEnv) return fromTopicEnv;
+  }
+  if (ntfy.defaultTopic) return ntfy.defaultTopic;
+  const fromEnv = env.NTFY_TOPIC;
+  return typeof fromEnv === 'string' ? fromEnv : '';
+}
+
+function safeHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+type MigrationContext = {
+  store: BillingStore;
+  env: NodeJS.ProcessEnv;
+  resolvedTopic: string;
+  nowIso: string;
+  getMasterKey: () => Buffer;
+};
+
+async function migrateBillingJob(
+  raw: LegacyBillingJobDoc,
+  ctx: MigrationContext,
+): Promise<void> {
+  if (typeof raw.provider !== 'string' || raw.provider.length === 0) {
+    throw new ConfigError(`Legacy job ${String(raw.id)} is missing "provider"`);
+  }
+  const notifyTitle = raw.notify?.title;
+  if (typeof notifyTitle !== 'string' || notifyTitle.length === 0) {
+    throw new ConfigError(`Legacy job ${raw.id} is missing "notify.title"`);
+  }
+
+  const userId = typeof raw.userId === 'string' ? raw.userId : '';
+  const secretIds: string[] = [];
+
+  for (const [fieldKey, envName] of Object.entries(raw.credentialsEnv ?? {})) {
+    const value = ctx.env[envName];
+    if (!value) continue;
+    const { ciphertext, iv, tag } = encryptSecret(value, ctx.getMasterKey());
+    const secret: SecretDocument = {
+      id: randomUUID(),
+      userId,
+      jobId: raw.id,
+      conversationId: null,
+      key: fieldKey,
+      ciphertext,
+      iv,
+      tag,
+      createdAt: ctx.nowIso,
+      updatedAt: ctx.nowIso,
+    };
+    await ctx.store.upsertSecret(secret);
+    secretIds.push(secret.id);
+  }
+
+  const job: JobDocument = {
+    id: raw.id,
+    userId,
+    name: notifyTitle,
+    enabled: raw.enabled === true,
+    schedule: typeof raw.schedule === 'string' ? raw.schedule : null,
+    startUrl: ADAPTER_START_URLS[raw.provider] ?? '',
+    engine: 'adapter',
+    adapterId: raw.provider,
+    goal: notifyTitle,
+    schema: ADAPTER_SCHEMA,
+    workflow: [],
+    secretIds,
+    notify: {
+      title: notifyTitle,
+      on: 'always',
+      channel: { type: 'ntfy', topic: ctx.resolvedTopic },
+    },
+    lastResult: null,
+    createdAt: ctx.nowIso,
+    updatedAt: ctx.nowIso,
+  };
+
+  await ctx.store.upsertJob(job);
+}
+
+/**
+ * Deterministic workflow: `goto` the watch URL, then one `extract` step that
+ * tries `shopify_json` first and falls back to the generic `price` strategy
+ * (the interpreter — slice 2 — walks fields in order and keeps the first hit
+ * per key). Not runnable until the interpreter exists.
+ */
+function watchWorkflowSteps(url: string): WorkflowStep[] {
+  return [
+    { id: 'goto-watch', type: 'goto', url },
+    {
+      id: 'extract-price',
+      type: 'extract',
+      fields: [
+        { key: 'price', strategy: 'shopify_json' },
+        { key: 'currency', strategy: 'shopify_json' },
+        { key: 'price', strategy: 'price' },
+      ],
+    },
+  ];
+}
+
+function watchLastResult(
+  watch: WatchDocument,
+): Record<string, string | number> | null {
+  if (watch.lastPrice === null) return null;
+  return {
+    price: watch.lastPrice,
+    ...(watch.lastCurrency !== null ? { currency: watch.lastCurrency } : {}),
+  };
+}
+
+function watchToWorkflowJob(watch: WatchDocument, ctx: MigrationContext): JobDocument {
+  const name = watch.title ?? safeHostname(watch.url);
+  return {
+    id: watch.id,
+    userId: watch.userId,
+    name,
+    enabled: watch.enabled,
+    schedule: watch.schedule,
+    startUrl: watch.url,
+    engine: 'workflow',
+    goal: name,
+    schema: WATCH_SCHEMA,
+    workflow: watchWorkflowSteps(watch.url),
+    secretIds: [],
+    notify: {
+      title: name,
+      on: 'drop',
+      channel: { type: 'ntfy', topic: ctx.resolvedTopic },
+    },
+    lastResult: watchLastResult(watch),
+    createdAt: watch.createdAt,
+    updatedAt: ctx.nowIso,
+  };
+}
+
+function priceCheckToRun(check: PriceCheckDocument, jobId: string): RunDocument {
+  const running = check.status === 'running';
+  const result: Record<string, unknown> | null =
+    check.status === 'success'
+      ? {
+          ...(check.price !== null ? { price: check.price } : {}),
+          ...(check.currency !== null ? { currency: check.currency } : {}),
+        }
+      : null;
+
+  return {
+    id: check.id,
+    jobId,
+    userId: check.userId,
+    engine: 'workflow',
+    status: check.status,
+    startedAt: check.checkedAt,
+    finishedAt: running ? null : check.checkedAt,
+    durationMs: null,
+    errorCode: check.error ? 'ScrapeError' : null,
+    errorMessage: check.error,
+    screenshotPath: null,
+    recoveryAttempted: false,
+    recoverySucceeded: false,
+    overlayActivated: false,
+    result,
+  };
+}
+
+/**
+ * Idempotent Slice 1 migration (see docs/superpowers/specs/2026-08-16-generic-site-jobs-design.md#migration):
+ *  - legacy billing jobs (`provider` present, no `engine`) → `engine: 'adapter'`
+ *    jobs, `credentialsEnv` values copied from `env` into encrypted `secrets`
+ *  - watches → `engine: 'workflow'` jobs (not runnable until the slice 2
+ *    interpreter exists)
+ *  - `price_checks` → `runs`
+ *  - settings: keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; drop the
+ *    required `topicEnv` and `watchesGeneration`
+ *
+ * Never deletes `watches` or `price_checks` (Slice 5 only). Safe to run
+ * repeatedly: already-migrated jobs (raw doc already has `engine`), watches
+ * with an existing workflow job, and price_checks with an existing run are
+ * all skipped.
+ */
+export async function migrateGenericJobs(input: {
+  store: BillingStore;
+  env: NodeJS.ProcessEnv;
+  now?: Date;
+}): Promise<MigrateGenericJobsResult> {
+  const { store, env } = input;
+  const nowIso = (input.now ?? new Date()).toISOString();
+
+  const settings = await store.getSettings();
+  const resolvedTopic = resolveGlobalNtfyTopic(settings.ntfy, env);
+
+  let masterKey: Buffer | undefined;
+  const ctx: MigrationContext = {
+    store,
+    env,
+    resolvedTopic,
+    nowIso,
+    getMasterKey: () => {
+      if (!masterKey) masterKey = parseMasterKey(env);
+      return masterKey;
+    },
+  };
+
+  let jobsMigrated = 0;
+  for (const job of await store.listJobs()) {
+    if (!isUnmigratedJob(job)) continue;
+    await migrateBillingJob(job, ctx);
+    jobsMigrated += 1;
+  }
+
+  let watchesMigrated = 0;
+  let runsMigrated = 0;
+  for (const watch of await store.listWatches()) {
+    const existingJob = await store.getJob(watch.id);
+    if (!isMigratedJob(existingJob)) {
+      await store.upsertJob(watchToWorkflowJob(watch, ctx));
+      watchesMigrated += 1;
+    }
+
+    for (const check of await store.listPriceChecks({ watchId: watch.id })) {
+      const existingRun = await store.getRun(check.id);
+      if (existingRun) continue;
+      await store.createRun(priceCheckToRun(check, watch.id));
+      runsMigrated += 1;
+    }
+  }
+
+  await store.upsertSettings({
+    ntfy: {
+      baseUrl: settings.ntfy.baseUrl,
+      priority: settings.ntfy.priority,
+      ...(resolvedTopic ? { defaultTopic: resolvedTopic } : {}),
+    },
+    mistral: settings.mistral,
+    browser: settings.browser,
+    jobsGeneration: settings.jobsGeneration,
+  });
+
+  return { jobsMigrated, watchesMigrated, runsMigrated };
+}

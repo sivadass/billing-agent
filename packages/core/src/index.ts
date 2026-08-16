@@ -9,6 +9,7 @@ export * from './config.js';
 export * from './errors.js';
 export * from './job-runner.js';
 export * from './logger.js';
+export * from './migrate-generic-jobs.js';
 export * from './notify.js';
 export * from './overlay.js';
 export * from './recovery.js';

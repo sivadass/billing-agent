@@ -8,6 +8,7 @@ import {
   hashPassword,
   loadConfigFromStore,
   loadSeedConfig,
+  migrateGenericJobs,
   registerBuiltInAdapters,
   runJob,
   runJobs,
@@ -296,6 +297,25 @@ program
 
         console.log(
           `Assigned ${orphanJobs.length} job(s) and ${orphanRuns.length} run(s) to ${user.email}`,
+        );
+      } finally {
+        await store.close();
+      }
+    }),
+  );
+
+program
+  .command('migrate-generic-jobs')
+  .description(
+    'Idempotent: migrate legacy billing jobs/watches/price_checks into the unified job/run model',
+  )
+  .action(
+    withErrorHandling(async () => {
+      const store = await connectStore(requireMongoUri());
+      try {
+        const result = await migrateGenericJobs({ store, env: process.env });
+        console.log(
+          `Migrated ${result.jobsMigrated} job(s), ${result.watchesMigrated} watch(es), ${result.runsMigrated} run(s)`,
         );
       } finally {
         await store.close();

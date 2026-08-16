@@ -269,8 +269,8 @@ Behavior (idempotent): skip jobs that already have `engine`. For legacy jobs, ap
 
 TNPDCL `startUrl`: `https://www.tnebnet.org/awp/login`. Dummy `startUrl`: `file://` fixture or existing dummy URL used by the adapter.
 
-- [ ] Unit test with in-memory fake store (do not require Mongo): one legacy tnpdcl job + one watch + one price_check → new documents.
-- [ ] Wire CLI:
+- [x] Unit test with in-memory fake store (do not require Mongo): one legacy tnpdcl job + one watch + one price_check → new documents.
+- [x] Wire CLI:
 
 ```text
 billing-agent migrate-generic-jobs

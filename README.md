@@ -45,6 +45,21 @@ Key runtime variables:
 | `MISTRAL_API_KEY` | Mistral API key (used for captcha + recovery) |
 | `TNPDCL_USERNAME` | TNPDCL login |
 | `TNPDCL_PASSWORD` | TNPDCL login |
+| `SECRETS_MASTER_KEY` | AES-256-GCM key wrapping per-job secrets (`secrets` collection); required before running/migrating any job with credentials |
+
+### Generating `SECRETS_MASTER_KEY`
+
+A 32-byte key, hex (64 chars) or base64 (44 chars):
+
+```bash
+# hex
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# or base64
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Store the result in `.env` / the host's secret manager. Losing or rotating this key makes every existing `secrets` row undecryptable — back it up like a password. Missing or malformed values raise `ConfigError` the moment a job actually needs to encrypt/decrypt a secret (not at process boot).
 
 ## Install
 
@@ -96,6 +111,19 @@ There are no register / forgot-password APIs. Users are provisioned by inserting
    This looks up the user by email (failing if the user doesn't exist), sets `userId` on every job and run currently missing one, and prints the counts updated.
 
 4. Log in from the web app (or `POST /auth/login`) with the email/password to get a Bearer JWT.
+
+## Migrating legacy jobs/watches to the generic job model
+
+`migrate-generic-jobs` is a one-time, idempotent migration from the old `provider` / `credentialsEnv` billing jobs and the separate `watches` / `price_checks` pipeline onto the unified `JobDocument` / `RunDocument` model (`engine: 'adapter' | 'workflow'`). Requires `SECRETS_MASTER_KEY` (see above) whenever a legacy job actually has `credentialsEnv` values to encrypt.
+
+```bash
+npm run dev -w @billing-agent/worker -- migrate-generic-jobs
+```
+
+- Legacy billing jobs (`provider` + `credentialsEnv`): each `credentialsEnv` entry is resolved from `process.env` and encrypted into a `secrets` row (never written to the job document); the job gets `engine: 'adapter'`, `adapterId: provider`, and the adapter's default `startUrl`.
+- Watches become `engine: 'workflow'` jobs with a deterministic `goto` + `extract` workflow (not runnable until the workflow interpreter ships); `price_checks` rows are copied into `runs`.
+- Settings keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; the resolved ntfy topic becomes `ntfy.defaultTopic` and `topicEnv` / `watchesGeneration` are dropped.
+- Safe to re-run: jobs that already have `engine` set, watches with an existing workflow job, and price checks with an existing run are all skipped. `watches` and `price_checks` are never deleted in this slice.
 
 ## Commands
 
