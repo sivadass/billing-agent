@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertPublicHttpUrl, PublicUrlError } from '../assert-public-url.js';
 import { ConfigError } from '../errors.js';
+import { isLocalFileAuthority } from './validate.js';
 
 /**
  * `<repo>/fixtures`, derived from this module's own location so it is identical
@@ -32,8 +33,22 @@ function canonicalPath(target: string, label: string): string {
  * `..` traversal and symlinks that point out of the tree.
  */
 function resolveFixtureFileUrl(parsed: URL): string {
+  // `fileURLToPath` throws a bare `TypeError` for a non-local authority
+  // (`file://evil.example/etc/passwd`), which would escape as an untyped
+  // failure, so the authority is checked here and the conversion is guarded.
+  if (!isLocalFileAuthority(parsed)) {
+    throw new ConfigError(
+      `workflow goto: file: url authority "${parsed.host}" is not allowed`,
+    );
+  }
   const fixturesDir = canonicalPath(repoFixturesDir(), 'fixtures directory');
-  const target = canonicalPath(fileURLToPath(parsed), 'file');
+  let filePath: string;
+  try {
+    filePath = fileURLToPath(parsed);
+  } catch {
+    throw new ConfigError('workflow goto: file: url could not be resolved to a path');
+  }
+  const target = canonicalPath(filePath, 'file');
   const relative = path.relative(fixturesDir, target);
   if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new ConfigError(

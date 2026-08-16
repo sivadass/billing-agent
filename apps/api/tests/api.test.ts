@@ -607,6 +607,171 @@ describe('POST /jobs canonical shape', () => {
     assert.equal(response.status, 400);
   });
 
+  // Write-time validation shares `validateWorkflow` with the interpreter, so
+  // every workflow the runner would refuse to execute is a 400 here instead of
+  // a job that fails on its first scheduled tick.
+  it('returns 400 for every workflow the interpreter would refuse to run', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+    const extract = {
+      id: 'read-email',
+      type: 'extract',
+      fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+    };
+    const cases: Array<[string, unknown]> = [
+      ['goto protocol', [{ id: 'g', type: 'goto', url: 'javascript:alert(1)' }, extract]],
+      ['goto private host', [{ id: 'g', type: 'goto', url: 'http://127.0.0.1/' }, extract]],
+      ['goto relative url', [{ id: 'g', type: 'goto', url: '/products' }, extract]],
+      ['goto file authority', [{ id: 'g', type: 'goto', url: 'file://evil.example/x' }, extract]],
+      [
+        'fill secret without secretKey',
+        [{ id: 'f', type: 'fill', selector: '#p', source: 'secret' }, extract],
+      ],
+      [
+        'fill literal without value',
+        [{ id: 'f', type: 'fill', selector: '#p', source: 'literal' }, extract],
+      ],
+      [
+        'fill with an unknown source',
+        [{ id: 'f', type: 'fill', selector: '#p', source: 'env', value: 'X' }, extract],
+      ],
+      ['wait with neither selector nor timeout', [{ id: 'w', type: 'wait' }, extract]],
+      ['wait timeout zero', [{ id: 'w', type: 'wait', timeoutMs: 0 }, extract]],
+      [
+        'wait timeout beyond the cap',
+        [{ id: 'w', type: 'wait', timeoutMs: 10_000_000 }, extract],
+      ],
+      ['empty extract fields', [{ id: 'e', type: 'extract', fields: [] }]],
+      [
+        'text strategy without a selector',
+        [{ id: 'e', type: 'extract', fields: [{ key: 'email', strategy: 'text' }] }],
+      ],
+      [
+        'duplicate step ids',
+        [
+          { id: 'same', type: 'goto', url: 'https://sivadass.in/' },
+          { ...extract, id: 'same' },
+        ],
+      ],
+      [
+        'unknown step property',
+        [{ id: 's', type: 'click', selector: '#a', script: 'alert(1)' }, extract],
+      ],
+    ];
+
+    for (const [label, workflow] of cases) {
+      const id = `bad-${label.replace(/[^a-z0-9]+/gi, '-')}`;
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id,
+            engine: 'workflow',
+            adapterId: undefined,
+            startUrl: 'https://sivadass.in/',
+            workflow,
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400, label);
+      assert.equal(await store.getJob(id), null, label);
+    }
+  });
+
+  it('returns 400 for a workflow job with no extract step to replay', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    for (const [label, workflow] of [
+      ['empty', []],
+      ['navigation only', [{ id: 'g', type: 'goto', url: 'https://sivadass.in/' }]],
+    ] as Array<[string, unknown]>) {
+      const id = `no-extract-${label.replace(/\s+/g, '-')}`;
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id,
+            engine: 'workflow',
+            adapterId: undefined,
+            startUrl: 'https://sivadass.in/',
+            workflow,
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400, label);
+      assert.equal(await store.getJob(id), null, label);
+    }
+  });
+
+  it('accepts the workflow shape a migrated watch job carries', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'craftandglory-in-a1b2',
+          engine: 'workflow',
+          adapterId: undefined,
+          startUrl: 'https://craftandglory.in/products/sneakers',
+          schema: [
+            { key: 'price', label: 'Price', type: 'price' },
+            { key: 'currency', label: 'Currency', type: 'string' },
+          ],
+          workflow: [
+            {
+              id: 'goto-watch',
+              type: 'goto',
+              url: 'https://craftandglory.in/products/sneakers',
+            },
+            {
+              id: 'extract-price',
+              type: 'extract',
+              fields: [
+                { key: 'price', strategy: 'shopify_json' },
+                { key: 'currency', strategy: 'shopify_json' },
+                { key: 'price', strategy: 'price' },
+              ],
+            },
+          ],
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const stored = await store.getJob('craftandglory-in-a1b2');
+    assert.equal(stored?.workflow.length, 2);
+  });
+
+  it('keeps accepting an adapter job with an empty workflow', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload({ id: 'adapter-empty-workflow' })),
+    });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual((await store.getJob('adapter-empty-workflow'))?.workflow, []);
+  });
+
   it('keeps accepting a legacy provider payload as an adapter job', async () => {
     const { handle, token } = await setupAuthedServer();
 
@@ -983,6 +1148,16 @@ describe('job URLs must pass the public-url check', () => {
 });
 
 describe('startUrl is required where the engine needs it', () => {
+  /** Minimal workflow that passes validation: navigate, then extract something. */
+  const replayableWorkflow = [
+    { id: 'open', type: 'goto', url: 'https://sivadass.in/' },
+    {
+      id: 'read-price',
+      type: 'extract',
+      fields: [{ key: 'price', selector: '.price', strategy: 'text' }],
+    },
+  ];
+
   async function postWorkflowJob(
     port: number,
     token: string,
@@ -999,7 +1174,7 @@ describe('startUrl is required where the engine needs it', () => {
         engine: 'workflow',
         name: 'Flow',
         goal: 'Read the price',
-        workflow: [{ id: 'goto', type: 'goto', url: 'https://sivadass.in/' }],
+        workflow: replayableWorkflow,
         notify: { title: 'Flow', on: 'always', channel: { type: 'ntfy', topic: 'flow' } },
         ...overrides,
       }),
@@ -1065,7 +1240,7 @@ describe('startUrl is required where the engine needs it', () => {
       },
       body: JSON.stringify({
         engine: 'workflow',
-        workflow: [{ id: 'open', type: 'goto', url: 'https://sivadass.in/' }],
+        workflow: replayableWorkflow,
       }),
     });
 
@@ -1112,7 +1287,7 @@ describe('startUrl is required where the engine needs it', () => {
       body: JSON.stringify({
         engine: 'workflow',
         startUrl: 'https://sivadass.in/',
-        workflow: [{ id: 'open', type: 'goto', url: 'https://sivadass.in/' }],
+        workflow: replayableWorkflow,
       }),
     });
 
@@ -1130,7 +1305,14 @@ describe('startUrl is required where the engine needs it', () => {
       ...canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }),
       engine: 'workflow',
       adapterId: undefined,
-      workflow: [{ id: 'open', type: 'goto', url: fixtureUrl }],
+      workflow: [
+        { id: 'open', type: 'goto', url: fixtureUrl },
+        {
+          id: 'read-price',
+          type: 'extract',
+          fields: [{ key: 'price', selector: '.price', strategy: 'text' }],
+        },
+      ],
     } as JobDocument);
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {

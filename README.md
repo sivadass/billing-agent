@@ -242,7 +242,12 @@ Shapes used above:
   `selector` / `timeoutMs`, `solve_captcha` takes `imageSelector` /
   `inputSelector`, and `extract` takes `fields` of
   `{ key, selector?, strategy? }` with `strategy` one of `text`, `price`,
-  `json_ld`, `shopify_json`.
+  `json_ld`, `shopify_json`. Steps are validated with the same function the
+  interpreter runs, so a workflow that would fail at run time is a `400` here:
+  step ids must be unique, `goto` takes a public http(s) URL, a `text` field
+  needs a `selector`, and a `wait` needs a `selector` or a `timeoutMs`.
+  Repeating a field `key` inside one `extract` step lists strategy candidates
+  for that key, tried in order until one returns a value.
 
 Notes on the payload:
 
@@ -254,8 +259,11 @@ Notes on the payload:
   `notify.on`, or channel is a `400` rather than a silent default.
 - `startUrl`, a `webhook` channel `url`, and an ntfy `baseUrl` must be public
   http(s) URLs; localhost, private and link-local ranges, the cloud metadata
-  address, and `.local` / `.internal` hosts are rejected. A `workflow` job must
-  supply a `startUrl`.
+  address, `0.0.0.0`, IPv4-mapped IPv6 forms of those ranges, and `.local` /
+  `.internal` hosts are rejected (no DNS lookup happens, so a hostname that
+  resolves to a private address is not blocked). A `workflow` job must supply a
+  `startUrl` and at least one `extract` step to replay; `adapter` jobs keep an
+  empty `workflow`.
 - `secretIds`, `lastResult`, `userId`, and the timestamps are server-owned and
   ignored if sent.
 

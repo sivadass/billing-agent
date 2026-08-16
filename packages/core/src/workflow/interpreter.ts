@@ -33,22 +33,22 @@ export type RunWorkflowInput = {
   extractStrategies?: ExtractStrategyRegistry;
 };
 
-/**
- * Secret values shorter than this are not redacted: they collide with ordinary
- * words in error text (turning messages into noise) and are not credentials
- * worth protecting.
- */
-const MIN_REDACTED_LENGTH = 3;
-
 const REDACTED = '***';
 
+/**
+ * Every non-empty secret value, longest first and de-duplicated. Length is not a
+ * filter: a two-character PIN or a captcha answer is still a credential.
+ * Replacing the longest values first keeps overlapping secrets ("pw" inside
+ * "pw123") from leaving a fragment of the longer one behind.
+ */
 function collectSecretValues(secrets: Record<string, string>): string[] {
-  return Object.values(secrets)
-    .filter(
-      (value): value is string =>
-        typeof value === 'string' && value.length >= MIN_REDACTED_LENGTH,
-    )
-    .sort((a, b) => b.length - a.length);
+  return [
+    ...new Set(
+      Object.values(secrets).filter(
+        (value): value is string => typeof value === 'string' && value !== '',
+      ),
+    ),
+  ].sort((a, b) => b.length - a.length);
 }
 
 function redact(text: string, secretValues: string[]): string {
@@ -57,6 +57,38 @@ function redact(text: string, secretValues: string[]): string {
     out = out.split(value).join(REDACTED);
   }
   return out;
+}
+
+/**
+ * Walks everything a caller could read off a thrown value — message, stack, own
+ * properties, and the whole nested `cause` chain — so a secret hidden several
+ * levels deep is still detected. Depth and a `seen` set keep cyclic causes safe.
+ */
+function leaksSecret(
+  value: unknown,
+  secretValues: string[],
+  seen = new Set<unknown>(),
+  depth = 0,
+): boolean {
+  if (secretValues.length === 0 || depth > 8) return false;
+  if (typeof value === 'string') {
+    return secretValues.some((secret) => value.includes(secret));
+  }
+  if (value === null || value === undefined) return false;
+  if (typeof value !== 'object') {
+    return leaksSecret(String(value), secretValues, seen, depth + 1);
+  }
+  if (seen.has(value)) return false;
+  seen.add(value);
+
+  const nested: unknown[] =
+    value instanceof Error
+      ? [value.message, value.stack, value.cause]
+      : [];
+  for (const key of Object.getOwnPropertyNames(value)) {
+    nested.push((value as Record<string, unknown>)[key]);
+  }
+  return nested.some((entry) => leaksSecret(entry, secretValues, seen, depth + 1));
 }
 
 function errorForCode(code: ErrorCode, message: string): AppError {
@@ -82,30 +114,47 @@ function defaultErrorCode(step: WorkflowStep): ErrorCode {
       return 'TimeoutError';
     case 'fill':
       return step.source === 'secret' ? 'LoginError' : 'ScrapeError';
+    // Recovery must never re-run a captcha step (design: ConfigError,
+    // NotifyError and CaptchaError are not recovered), so anything a solver or
+    // its transport throws is reported as a captcha failure.
+    case 'solve_captcha':
+      return 'CaptchaError';
     default:
       return 'ScrapeError';
   }
 }
 
+/** Codes the recovery loop retries; on a captcha step they are re-typed. */
+const RECOVERABLE_CODES: ErrorCode[] = ['LoginError', 'ScrapeError', 'TimeoutError'];
+
+function stepErrorCode(step: WorkflowStep, cause: AppError): ErrorCode {
+  if (step.type === 'solve_captcha' && RECOVERABLE_CODES.includes(cause.code)) {
+    return 'CaptchaError';
+  }
+  return cause.code;
+}
+
 /**
  * Rewrites a step failure so no secret plaintext can reach a log line, a run
- * document, or a notification. `cause` is only preserved when the original text
- * carried no secret — otherwise the redacted message is all a caller gets.
+ * document, or a notification. The original error is only chained as `cause`
+ * when nothing anywhere in it (message, stack, properties, nested causes)
+ * carries a secret — otherwise the redacted message is all a caller gets.
  */
 function toStepError(
   step: WorkflowStep,
   cause: unknown,
   secretValues: string[],
 ): AppError {
-  const raw = cause instanceof Error ? cause.message : String(cause);
-  const redacted = redact(raw, secretValues);
-  const leaked = redacted !== raw;
+  const leaked = leaksSecret(cause, secretValues);
 
   if (cause instanceof AppError) {
-    return leaked ? errorForCode(cause.code, redacted) : cause;
+    const code = stepErrorCode(step, cause);
+    if (!leaked && code === cause.code) return cause;
+    return errorForCode(code, redact(cause.message, secretValues));
   }
 
-  const message = `workflow step "${step.id}" (${step.type}) failed: ${redacted}`;
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  const message = `workflow step "${step.id}" (${step.type}) failed: ${redact(raw, secretValues)}`;
   const code = defaultErrorCode(step);
   return leaked
     ? errorForCode(code, message)
@@ -234,8 +283,18 @@ async function runStep(
     }
 
     case 'extract': {
+      // Fields sharing a key are candidates for that key, tried in order until
+      // one produces a value (a migrated watch uses this to try Shopify JSON
+      // before the generic price cascade). A key only fails once every one of
+      // its candidates has missed.
+      const resolved = new Set<string>();
+      const attempted = new Map<string, string[]>();
+
       for (const field of step.fields) {
+        if (resolved.has(field.key)) continue;
         const strategy = field.strategy ?? 'text';
+        attempted.set(field.key, [...(attempted.get(field.key) ?? []), strategy]);
+
         const handler = resolveExtractStrategy(
           strategies,
           strategy,
@@ -245,12 +304,21 @@ async function runStep(
         const value = await handler({ page, field, stepId: step.id, timeoutMs });
         const normalized = typeof value === 'string' ? value.trim() : value;
         if (normalized === undefined || normalized === null || normalized === '') {
-          throw new ScrapeError(
-            `workflow step "${step.id}": no value extracted for field "${field.key}" using strategy "${strategy}"`,
-          );
+          continue;
         }
         result[field.key] = normalized;
+        resolved.add(field.key);
       }
+
+      for (const [key, strategiesTried] of attempted) {
+        if (resolved.has(key)) continue;
+        throw new ScrapeError(
+          `workflow step "${step.id}": no value extracted for field "${key}" using strateg${
+            strategiesTried.length === 1 ? 'y' : 'ies'
+          } "${strategiesTried.join('", "')}"`,
+        );
+      }
+
       state.extracted = true;
       return;
     }

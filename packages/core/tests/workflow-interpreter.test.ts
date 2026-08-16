@@ -45,21 +45,27 @@ async function run(
   );
 }
 
-/** Collects every string an operator could plausibly see for a thrown error. */
-function errorSurface(error: unknown): string {
-  const parts: string[] = [];
-  let current: unknown = error;
-  for (let depth = 0; depth < 5 && current; depth += 1) {
-    parts.push(String(current));
-    if (current instanceof Error) {
-      parts.push(current.message, current.stack ?? '');
-      parts.push(
-        JSON.stringify(current, Object.getOwnPropertyNames(current)) ?? '',
-      );
-      current = current.cause;
-    } else {
-      break;
-    }
+/**
+ * Every string an operator could plausibly see for a thrown error: message,
+ * stack, own properties (enumerable or not), and the whole nested `cause` chain,
+ * recursively — a secret hidden three causes deep still counts as a leak.
+ */
+function errorSurface(value: unknown, seen = new Set<unknown>()): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value !== 'object') return String(value);
+  if (seen.has(value)) return '';
+  seen.add(value);
+
+  const parts: string[] = [String(value)];
+  if (value instanceof Error) {
+    parts.push(value.message, value.stack ?? '');
+  }
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const entry = (value as Record<string, unknown>)[key];
+    parts.push(key, errorSurface(entry, seen));
+  }
+  if (value instanceof Error && value.cause !== undefined) {
+    parts.push(errorSurface(value.cause, seen));
   }
   return parts.join('\n');
 }
@@ -228,16 +234,39 @@ describe('validateWorkflow', () => {
       { id: 'e', type: 'extract', fields: [{ key: 'a', strategy: 'llm' }] },
       { id: 'e', type: 'extract', fields: [{ key: 'a', strategy: 'text' }] },
       { id: 'e', type: 'extract', fields: [{ key: 'a' }] },
-      {
-        id: 'e',
-        type: 'extract',
-        fields: [
-          { key: 'a', selector: '#a' },
-          { key: 'a', selector: '#b' },
-        ],
-      },
     ]) {
       assert.throws(() => validateWorkflow([step]), ConfigError, JSON.stringify(step));
+    }
+  });
+
+  it('accepts repeated field keys as a strategy cascade (migrated watch shape)', () => {
+    const steps = validateWorkflow([
+      { id: 'goto-watch', type: 'goto', url: 'https://craftandglory.in/products/x' },
+      {
+        id: 'extract-price',
+        type: 'extract',
+        fields: [
+          { key: 'price', strategy: 'shopify_json' },
+          { key: 'currency', strategy: 'shopify_json' },
+          { key: 'price', strategy: 'price' },
+        ],
+      },
+    ]);
+
+    assert.equal(steps.length, 2);
+    assert.equal(steps[1].type === 'extract' && steps[1].fields.length, 3);
+  });
+
+  it('rejects file: urls with a hostile authority', () => {
+    for (const url of [
+      'file://evil.example/etc/passwd',
+      'file://attacker.test/workspace/fixtures/login-extract.html',
+    ]) {
+      assert.throws(
+        () => validateWorkflow([{ id: 'g', type: 'goto', url }]),
+        ConfigError,
+        url,
+      );
     }
   });
 
@@ -315,6 +344,25 @@ describe('runWorkflow — goto url restrictions', () => {
       ]),
       (error: unknown) => error instanceof ConfigError,
     );
+  });
+
+  it('rejects a hostile file: authority as ConfigError, not a raw TypeError', async () => {
+    // `fileURLToPath` throws a bare TypeError for a non-local authority; the
+    // interpreter must not leak that as an untyped failure.
+    for (const url of [
+      'file://evil.example/etc/passwd',
+      `file://attacker.test${FIXTURE_PATH}`,
+    ]) {
+      const captured = await run([{ id: 'g', type: 'goto', url }]).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      assert.ok(
+        captured instanceof ConfigError,
+        `${url} → ${captured?.constructor.name}: ${String(captured)}`,
+      );
+      assert.ok(!(captured instanceof TypeError));
+    }
   });
 
   it('rejects a symlink inside fixtures that escapes the fixtures directory', async (t) => {
@@ -496,6 +544,91 @@ describe('runWorkflow — login path (local fixture only)', () => {
     assert.ok(!surface.includes(PASSWORD), 'secret leaked into error surface');
   });
 
+  /** Fails the workflow from inside an injected strategy handler. */
+  async function failInStrategy(
+    secrets: Record<string, string>,
+    throwFromStrategy: () => never,
+  ): Promise<unknown> {
+    return run(
+      [
+        gotoFixture(),
+        {
+          id: 'extract-price',
+          type: 'extract',
+          fields: [{ key: 'price', strategy: 'price' }],
+        },
+      ],
+      {
+        secrets,
+        extractStrategies: {
+          price: async () => throwFromStrategy(),
+        },
+      },
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+  }
+
+  it('redacts short secrets and secrets buried in nested causes and error properties', async () => {
+    // Short values are still credentials (a PIN, a one-time code), and a leak
+    // three causes deep or on an error property is still a leak. The values are
+    // chosen so a raw scan is meaningful: none of them occur in error class
+    // names or stack-frame paths.
+    const secrets = { pin: 'ß', otp: 'q7', password: PASSWORD };
+
+    const captured = await failInStrategy(secrets, () => {
+      const deepest = new Error(`deep pin=${secrets.pin} otp=${secrets.otp}`);
+      const middle = new Error(`middle ${PASSWORD}`, { cause: deepest });
+      const top = Object.assign(new Error('upstream rejected the request'), {
+        requestBody: `password=${PASSWORD}&otp=${secrets.otp}`,
+        details: { pin: secrets.pin },
+      });
+      top.cause = middle;
+      throw top;
+    });
+
+    assert.ok(captured instanceof Error, 'workflow should have failed');
+    const surface = errorSurface(captured);
+    for (const [key, value] of Object.entries(secrets)) {
+      assert.ok(!surface.includes(value), `secret "${key}" leaked into error surface`);
+    }
+  });
+
+  it('redacts a single-character secret out of the thrown message', async () => {
+    // A one-character secret cannot be scanned for globally (error class names
+    // and file paths contain every ASCII letter), so assert on the message.
+    const captured = await failInStrategy({ pin: 'a' }, () => {
+      throw new Error('upstream rejected pin=a for this account');
+    });
+
+    assert.ok(captured instanceof Error, 'workflow should have failed');
+    assert.ok(
+      !captured.message.includes('pin=a'),
+      `single-character secret left in message: ${captured.message}`,
+    );
+    assert.match(captured.message, /pin=\*\*\*/);
+  });
+
+  it('drops a leaking cause instead of chaining it', async () => {
+    const captured = await failInStrategy({ password: PASSWORD }, () => {
+      throw new Error(`upstream rejected ${PASSWORD}`);
+    });
+
+    assert.ok(captured instanceof Error, 'workflow should have failed');
+    assert.equal(captured.cause, undefined);
+  });
+
+  it('keeps the cause when nothing had to be redacted', async () => {
+    const original = new Error('upstream returned 503');
+    const captured = await failInStrategy({ password: PASSWORD }, () => {
+      throw original;
+    });
+
+    assert.ok(captured instanceof Error, 'workflow should have failed');
+    assert.equal(captured.cause, original);
+  });
+
   it('never leaks the secret plaintext into logs', async () => {
     const lines: string[] = [];
     const logger = {
@@ -528,7 +661,67 @@ describe('runWorkflow — login path (local fixture only)', () => {
     );
   });
 
+  const captchaSteps = [
+    gotoFixture(),
+    {
+      id: 'solve-captcha',
+      type: 'solve_captcha',
+      imageSelector: '#captcha-image',
+      inputSelector: '#captcha',
+    },
+  ];
+
   it('surfaces captcha solver failures as CaptchaError', async () => {
+    await assert.rejects(
+      run(captchaSteps, {
+        captchaSolver: {
+          solveFromImageBase64: async () => {
+            throw new CaptchaError('empty captcha response');
+          },
+        },
+      }),
+      CaptchaError,
+    );
+  });
+
+  it('types every untyped solve_captcha failure as CaptchaError so recovery skips it', async () => {
+    // Recovery must not retry captcha failures (design: never recover
+    // ConfigError / NotifyError / CaptchaError), so a transport error, a
+    // generic throw, or a recoverable AppError from the solver all become
+    // CaptchaError.
+    const failures: Array<[string, () => never]> = [
+      ['transport', () => {
+        throw new TypeError('fetch failed');
+      }],
+      ['generic', () => {
+        throw new Error('solver exploded');
+      }],
+      ['string', () => {
+        throw 'solver exploded';
+      }],
+      ['timeout', () => {
+        throw new TimeoutError('solver timed out');
+      }],
+      ['scrape', () => {
+        throw new ScrapeError('solver returned junk');
+      }],
+    ];
+
+    for (const [label, throwIt] of failures) {
+      const captured = await run(captchaSteps, {
+        captchaSolver: { solveFromImageBase64: async () => throwIt() },
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      assert.ok(
+        captured instanceof CaptchaError,
+        `${label} → ${(captured as Error)?.name}: ${String(captured)}`,
+      );
+    }
+  });
+
+  it('types a captcha screenshot failure as CaptchaError', async () => {
     await assert.rejects(
       run(
         [
@@ -536,18 +729,34 @@ describe('runWorkflow — login path (local fixture only)', () => {
           {
             id: 'solve-captcha',
             type: 'solve_captcha',
-            imageSelector: '#captcha-image',
+            imageSelector: '#no-such-image',
             inputSelector: '#captcha',
           },
         ],
-        {
-          captchaSolver: {
-            solveFromImageBase64: async () => {
-              throw new CaptchaError('empty captcha response');
-            },
+        { timeoutMs: 1500 },
+      ),
+      CaptchaError,
+    );
+  });
+
+  it('lets a non-recoverable ConfigError from the solver through unchanged', async () => {
+    await assert.rejects(
+      run(captchaSteps, {
+        captchaSolver: {
+          solveFromImageBase64: async () => {
+            throw new ConfigError('MISTRAL_API_KEY is not set');
           },
         },
-      ),
+      }),
+      ConfigError,
+    );
+  });
+
+  it('treats an empty solver answer as CaptchaError', async () => {
+    await assert.rejects(
+      run(captchaSteps, {
+        captchaSolver: { solveFromImageBase64: async () => '   ' },
+      }),
       CaptchaError,
     );
   });
@@ -698,6 +907,102 @@ describe('runWorkflow — extract failures and strategy seam', () => {
     assert.deepEqual(calls, ['price', 'sku']);
     assert.equal(result.price, 1234.5);
     assert.equal(result.sku, 'sku-42');
+  });
+
+  it('walks repeated field keys as a cascade and keeps the first hit', async () => {
+    const tried: string[] = [];
+    const result = await run(
+      [
+        gotoFixture(),
+        {
+          id: 'extract-price',
+          type: 'extract',
+          fields: [
+            { key: 'price', strategy: 'shopify_json' },
+            { key: 'currency', strategy: 'shopify_json' },
+            { key: 'price', strategy: 'price' },
+          ],
+        },
+      ],
+      {
+        extractStrategies: {
+          shopify_json: async ({ field }) => {
+            tried.push(`shopify_json:${field.key}`);
+            return field.key === 'currency' ? 'INR' : undefined;
+          },
+          price: async ({ field }) => {
+            tried.push(`price:${field.key}`);
+            return 1999;
+          },
+        },
+      },
+    );
+
+    assert.deepEqual(tried, [
+      'shopify_json:price',
+      'shopify_json:currency',
+      'price:price',
+    ]);
+    assert.equal(result.price, 1999);
+    assert.equal(result.currency, 'INR');
+  });
+
+  it('stops trying a key once a candidate strategy produced a value', async () => {
+    const tried: string[] = [];
+    const result = await run(
+      [
+        gotoFixture(),
+        {
+          id: 'extract-price',
+          type: 'extract',
+          fields: [
+            { key: 'price', strategy: 'shopify_json' },
+            { key: 'price', strategy: 'price' },
+          ],
+        },
+      ],
+      {
+        extractStrategies: {
+          shopify_json: async () => {
+            tried.push('shopify_json');
+            return 1499;
+          },
+          price: async () => {
+            tried.push('price');
+            return 1999;
+          },
+        },
+      },
+    );
+
+    assert.deepEqual(tried, ['shopify_json']);
+    assert.equal(result.price, 1499);
+  });
+
+  it('throws ScrapeError when every candidate for a key misses', async () => {
+    await assert.rejects(
+      run(
+        [
+          gotoFixture(),
+          {
+            id: 'extract-price',
+            type: 'extract',
+            fields: [
+              { key: 'price', strategy: 'shopify_json' },
+              { key: 'price', strategy: 'price' },
+            ],
+          },
+        ],
+        {
+          extractStrategies: {
+            shopify_json: async () => undefined,
+            price: async () => undefined,
+          },
+        },
+      ),
+      (error: unknown) =>
+        error instanceof ScrapeError && /price/.test(error.message),
+    );
   });
 
   it('throws ScrapeError when a required schema key was never extracted', async () => {

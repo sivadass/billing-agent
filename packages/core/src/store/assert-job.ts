@@ -8,6 +8,7 @@ import type {
   NotifyOn,
 } from './types.js';
 import type { WorkflowStep } from '../workflow/types.js';
+import { validateWorkflow } from '../workflow/validate.js';
 
 function requireObject(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -99,118 +100,22 @@ function assertExtractField(value: unknown, name: string): ExtractField {
   };
 }
 
-function assertWorkflowStep(value: unknown, name: string): WorkflowStep {
-  const step = requireObject(value, name);
-  const id = requireNonemptyString(step.id, `${name}.id`);
-  const type = requireNonemptyString(step.type, `${name}.type`);
-
-  switch (type) {
-    case 'goto':
-      return {
-        id,
-        type: 'goto',
-        url: requireNonemptyString(step.url, `${name}.url`),
-      };
-    case 'fill': {
-      const source = step.source;
-      if (source !== 'secret' && source !== 'literal') {
-        throw new ConfigError(`${name}.source must be 'secret' or 'literal'`);
-      }
-      return {
-        id,
-        type: 'fill',
-        selector: requireNonemptyString(step.selector, `${name}.selector`),
-        source,
-        ...(step.secretKey === undefined
-          ? {}
-          : { secretKey: requireString(step.secretKey, `${name}.secretKey`) }),
-        ...(step.value === undefined
-          ? {}
-          : { value: requireString(step.value, `${name}.value`) }),
-      };
-    }
-    case 'click':
-      return {
-        id,
-        type: 'click',
-        selector: requireNonemptyString(step.selector, `${name}.selector`),
-      };
-    case 'wait':
-      return {
-        id,
-        type: 'wait',
-        ...(step.selector === undefined
-          ? {}
-          : { selector: requireString(step.selector, `${name}.selector`) }),
-        ...(step.timeoutMs === undefined
-          ? {}
-          : {
-              timeoutMs: requireNumber(step.timeoutMs, `${name}.timeoutMs`),
-            }),
-      };
-    case 'solve_captcha':
-      return {
-        id,
-        type: 'solve_captcha',
-        imageSelector: requireString(step.imageSelector, `${name}.imageSelector`),
-        inputSelector: requireString(step.inputSelector, `${name}.inputSelector`),
-      };
-    case 'extract':
-      if (!Array.isArray(step.fields)) {
-        throw new ConfigError(`${name}.fields must be an array`);
-      }
-      return {
-        id,
-        type: 'extract',
-        fields: step.fields.map((field, index) =>
-          assertExtractFieldField(field, `${name}.fields[${index}]`),
-        ),
-      };
-    case 'assert':
-      if (step.exists !== true) {
-        throw new ConfigError(`${name}.exists must be true`);
-      }
-      return {
-        id,
-        type: 'assert',
-        selector: requireNonemptyString(step.selector, `${name}.selector`),
-        exists: true,
-      };
-    default:
-      throw new ConfigError(`${name}.type is not a valid workflow step type`);
+/**
+ * Workflow steps are validated by the very function the interpreter runs, so a
+ * job can never be written (API, seed config, migration) in a shape the runner
+ * would refuse to replay. `engine: 'adapter'` jobs keep an empty `workflow`.
+ */
+function assertWorkflow(value: unknown, engine: JobEngine): WorkflowStep[] {
+  if (!Array.isArray(value)) {
+    throw new ConfigError('job.workflow must be an array');
   }
-}
-
-function assertExtractFieldField(
-  value: unknown,
-  name: string,
-): { key: string; selector?: string; strategy?: 'text' | 'price' | 'json_ld' | 'shopify_json' } {
-  const field = requireObject(value, name);
-  const key = requireNonemptyString(field.key, `${name}.key`);
-  const strategy = field.strategy;
-  if (
-    strategy !== undefined &&
-    strategy !== 'text' &&
-    strategy !== 'price' &&
-    strategy !== 'json_ld' &&
-    strategy !== 'shopify_json'
-  ) {
-    throw new ConfigError(`${name}.strategy must be a valid extract strategy`);
+  const workflow = validateWorkflow(value);
+  if (engine === 'workflow' && !workflow.some((step) => step.type === 'extract')) {
+    throw new ConfigError(
+      'job.workflow must contain at least one extract step for a workflow job',
+    );
   }
-  return {
-    key,
-    ...(field.selector === undefined
-      ? {}
-      : { selector: requireString(field.selector, `${name}.selector`) }),
-    ...(strategy === undefined ? {} : { strategy }),
-  };
-}
-
-function requireNumber(value: unknown, name: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new ConfigError(`${name} must be a finite number`);
-  }
-  return value;
+  return workflow;
 }
 
 function assertLastResult(
@@ -245,9 +150,7 @@ export function assertJobDocument(raw: unknown): JobDocument {
   if (!Array.isArray(job.schema)) {
     throw new ConfigError('job.schema must be an array');
   }
-  if (!Array.isArray(job.workflow)) {
-    throw new ConfigError('job.workflow must be an array');
-  }
+  const workflow = assertWorkflow(job.workflow, engine);
   if (!Array.isArray(job.secretIds)) {
     throw new ConfigError('job.secretIds must be an array');
   }
@@ -267,9 +170,7 @@ export function assertJobDocument(raw: unknown): JobDocument {
     schema: job.schema.map((field, index) =>
       assertExtractField(field, `job.schema[${index}]`),
     ),
-    workflow: job.workflow.map((step, index) =>
-      assertWorkflowStep(step, `job.workflow[${index}]`),
-    ),
+    workflow,
     secretIds: job.secretIds.map((secretId, index) =>
       requireNonemptyString(secretId, `job.secretIds[${index}]`),
     ),

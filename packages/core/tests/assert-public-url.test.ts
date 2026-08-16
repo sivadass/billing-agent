@@ -35,4 +35,66 @@ describe('assertPublicHttpUrl', () => {
     assert.throws(() => assertPublicHttpUrl('http://[::1]'));
     assert.throws(() => assertPublicHttpUrl('http://[fe80::1]'));
   });
+
+  it('rejects the unspecified 0.0.0.0/8 range', () => {
+    // 0.0.0.0 routes to every local interface on Linux, so it reaches
+    // localhost services just like 127.0.0.1.
+    assert.throws(() => assertPublicHttpUrl('http://0.0.0.0'));
+    assert.throws(() => assertPublicHttpUrl('http://0.0.0.0:8080/jobs'));
+    assert.throws(() => assertPublicHttpUrl('http://0.1.2.3'));
+    assert.throws(() => assertPublicHttpUrl('http://[::]'));
+  });
+
+  it('rejects ipv4-mapped and ipv4-compatible ipv6 addresses', () => {
+    for (const host of [
+      '[::ffff:127.0.0.1]',
+      '[::ffff:7f00:1]',
+      '[::FFFF:169.254.169.254]',
+      '[::ffff:a9fe:a9fe]',
+      '[::ffff:10.0.0.8]',
+      '[::ffff:192.168.1.2]',
+      '[::ffff:172.16.0.5]',
+      '[::ffff:0.0.0.0]',
+      '[0:0:0:0:0:ffff:127.0.0.1]',
+      '[0000:0000:0000:0000:0000:ffff:7f00:0001]',
+      '[::127.0.0.1]',
+      '[::169.254.169.254]',
+    ]) {
+      assert.throws(() => assertPublicHttpUrl(`http://${host}/`), host);
+    }
+  });
+
+  it('still accepts public ip literals', () => {
+    // Guards against the private-range checks over-matching: these are all
+    // public addresses that sit next to blocked ranges.
+    for (const host of [
+      '8.8.8.8',
+      '1.1.1.1',
+      '11.0.0.1',
+      '172.15.0.1',
+      '172.32.0.1',
+      '192.169.0.1',
+      '169.253.0.1',
+      '100.64.0.1',
+    ]) {
+      assert.equal(assertPublicHttpUrl(`https://${host}/x`).hostname, host);
+    }
+    assert.equal(
+      assertPublicHttpUrl('https://[2606:4700:4700::1111]/x').hostname,
+      '[2606:4700:4700::1111]',
+    );
+    assert.equal(
+      assertPublicHttpUrl('https://[::ffff:8.8.8.8]/x').protocol,
+      'https:',
+    );
+  });
+
+  it('does not resolve DNS (rebinding-proof checks are a v1 non-goal)', () => {
+    // A hostname that resolves to a private address is still accepted: v1
+    // deliberately does no DNS lookups, so nip.io-style hosts pass.
+    assert.equal(
+      assertPublicHttpUrl('https://127-0-0-1.nip.io/path').hostname,
+      '127-0-0-1.nip.io',
+    );
+  });
 });

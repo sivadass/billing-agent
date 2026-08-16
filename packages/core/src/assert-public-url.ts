@@ -13,6 +13,9 @@ function isBlockedIpv4(hostname: string): boolean {
     return false;
   }
   const [a, b] = parts;
+  // 0.0.0.0/8: `0.0.0.0` reaches every local interface, so it is another
+  // spelling of localhost, and the rest of the range is unroutable anyway.
+  if (a === 0) return true;
   if (a === 10) return true;
   if (a === 127) return true;
   if (a === 169 && b === 254) return true;
@@ -28,6 +31,57 @@ function isBlockedIpv6(hostname: string): boolean {
   if (normalized.startsWith('fe80:')) return true;
   if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
   return false;
+}
+
+/**
+ * Expands an IPv6 literal (any `::` compression, optional trailing dotted quad,
+ * optional zone id) into its eight 16-bit groups. Returns `null` for anything it
+ * cannot parse — callers then fall back to the textual checks.
+ */
+function parseIpv6Groups(raw: string): number[] | null {
+  let text = raw.toLowerCase();
+  const zone = text.indexOf('%');
+  if (zone >= 0) text = text.slice(0, zone);
+
+  const dotted = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
+  if (dotted) {
+    const octets = dotted[1].split('.').map(Number);
+    if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+      return null;
+    }
+    const high = ((octets[0] << 8) | octets[1]).toString(16);
+    const low = ((octets[2] << 8) | octets[3]).toString(16);
+    text = `${text.slice(0, dotted.index)}${high}:${low}`;
+  }
+
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const parts =
+    halves.length === 2
+      ? [...head, ...new Array(8 - head.length - tail.length).fill('0'), ...tail]
+      : head;
+  if (parts.length !== 8) return null;
+
+  const groups = parts.map((part) =>
+    /^[0-9a-f]{1,4}$/.test(part) ? Number.parseInt(part, 16) : Number.NaN,
+  );
+  return groups.some(Number.isNaN) ? null : groups;
+}
+
+/**
+ * IPv4-mapped (`::ffff:127.0.0.1`, `::ffff:7f00:1`) and IPv4-compatible
+ * (`::127.0.0.1`) forms reach the embedded IPv4 address, so they must face the
+ * IPv4 rules rather than sliding past the IPv6 prefix checks.
+ */
+function embeddedIpv4(hostname: string): string | null {
+  const groups = parseIpv6Groups(hostname);
+  if (!groups) return null;
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (g0 || g1 || g2 || g3 || g4) return null;
+  if (g5 !== 0 && g5 !== 0xffff) return null;
+  return `${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`;
 }
 
 export function assertPublicHttpUrl(url: string): URL {
@@ -62,8 +116,16 @@ export function assertPublicHttpUrl(url: string): URL {
   if (ipKind === 4 && isBlockedIpv4(normalizedHost)) {
     throw new PublicUrlError('Private or loopback IPv4 addresses are not allowed');
   }
-  if (ipKind === 6 && isBlockedIpv6(normalizedHost)) {
-    throw new PublicUrlError('Private or loopback IPv6 addresses are not allowed');
+  if (ipKind === 6) {
+    if (isBlockedIpv6(normalizedHost)) {
+      throw new PublicUrlError('Private or loopback IPv6 addresses are not allowed');
+    }
+    const mapped = embeddedIpv4(normalizedHost);
+    if (mapped && isBlockedIpv4(mapped)) {
+      throw new PublicUrlError(
+        'IPv4-mapped private or loopback addresses are not allowed',
+      );
+    }
   }
 
   return parsed;

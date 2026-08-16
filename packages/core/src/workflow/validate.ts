@@ -70,6 +70,15 @@ function optionalNonEmptyString(
   return requireNonEmptyString(record, key, where);
 }
 
+/**
+ * `file:` URLs may only carry an empty host or `localhost`; any other authority
+ * is a remote target dressed up as a local path (and `fileURLToPath` throws a
+ * bare `TypeError` for it).
+ */
+export function isLocalFileAuthority(parsed: URL): boolean {
+  return parsed.host === '' || parsed.hostname === 'localhost';
+}
+
 function validateGotoUrl(url: string, where: string): string {
   let parsed: URL;
   try {
@@ -88,10 +97,16 @@ function validateGotoUrl(url: string, where: string): string {
     return url;
   }
 
-  // `file:` is only reachable for fixture-backed login tests; the interpreter
-  // re-checks the canonical path against the repo fixtures directory at run
-  // time, when the filesystem (and any symlink) can actually be inspected.
-  if (parsed.protocol === 'file:') return url;
+  // `file:` is only reachable for fixture-backed login tests. The authority is
+  // checked here because it is pure URL shape; the interpreter re-checks the
+  // canonical path against the repo fixtures directory at run time, when the
+  // filesystem (and any symlink) can actually be inspected.
+  if (parsed.protocol === 'file:') {
+    if (!isLocalFileAuthority(parsed)) {
+      fail(where, `"url" authority "${parsed.host}" is not allowed for a file: url`);
+    }
+    return url;
+  }
 
   fail(where, `"url" protocol "${parsed.protocol}" is not allowed`);
 }
@@ -233,16 +248,12 @@ function validateStep(value: unknown, index: number): WorkflowStep {
       if (!Array.isArray(rawFields) || rawFields.length === 0) {
         fail(stepWhere, '"fields" must be a non-empty array');
       }
+      // Repeated keys are legal and meaningful: they are strategy candidates
+      // for one field, tried in order until one produces a value (this is how a
+      // migrated watch expresses "Shopify JSON first, then the price cascade").
       const fields = rawFields.map((field, fieldIndex) =>
         validateExtractField(field, `${stepWhere} fields[${fieldIndex}]`),
       );
-      const keys = new Set<string>();
-      for (const field of fields) {
-        if (keys.has(field.key)) {
-          fail(stepWhere, `duplicate extract field key "${field.key}"`);
-        }
-        keys.add(field.key);
-      }
       return { id, type, fields };
     }
 
