@@ -19,3 +19,8 @@ export * from './store/assert-job.js';
 export * from './store/indexes.js';
 export * from './store/mongo.js';
 export * from './store/types.js';
+export * from './workflow/extract-strategies.js';
+export * from './workflow/goto-url.js';
+export * from './workflow/interpreter.js';
+export * from './workflow/types.js';
+export * from './workflow/validate.js';

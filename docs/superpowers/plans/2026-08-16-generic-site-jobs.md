@@ -346,9 +346,9 @@ Step semantics:
 - `extract` — for each field, `strategy: 'text'` → `innerText`; `price` / `json_ld` / `shopify_json` → call extract helpers (Task 8). Missing required schema key → `ScrapeError`
 - `assert` — locator count > 0 or `LoginError` / `ScrapeError`
 
-- [ ] Test (smoke, network): workflow `[goto https://sivadass.in/, extract mailto]`, `result.email` equals `contact@sivadass.in` (trim, case-insensitive).
-- [ ] Test (local): fill with secret `password` never appears in thrown error messages.
-- [ ] Interpreter does not import Mistral except via injected `captchaSolver`.
+- [x] Test (smoke, network): workflow `[goto https://sivadass.in/, extract mailto]`, `result.email` equals `contact@sivadass.in` (trim, case-insensitive).
+- [x] Test (local): fill with secret `password` never appears in thrown error messages.
+- [x] Interpreter does not import Mistral except via injected `captchaSolver`.
 
 ### Task 8: Move extract strategies into core
 

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Login extract fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 24px;
+      }
+      #never-visible {
+        display: none;
+      }
+      .field {
+        margin-bottom: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Fixture portal</h1>
+
+    <!--
+      Local-only fixture for workflow interpreter login/captcha/click/wait/assert
+      tests. It is deliberately script-free: the interpreter must drive it with
+      plain locator actions (no page.evaluate, no generated JS). The account
+      panel is a native <details> element, so clicking the summary is what makes
+      #account-panel visible.
+    -->
+    <form id="login-form" action="#">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="captcha">Captcha</label>
+        <img
+          id="captcha-image"
+          width="120"
+          height="40"
+          alt="captcha"
+          src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='40'><rect width='120' height='40' fill='%23eeeeee'/><text x='8' y='28' font-family='monospace' font-size='22' fill='%23222222'>A1B2C</text></svg>"
+        />
+        <input id="captcha" name="captcha" type="text" autocomplete="off" />
+      </div>
+    </form>
+
+    <details id="account">
+      <summary id="account-toggle">Show account</summary>
+      <div id="account-panel">
+        <span data-testid="account-email"> Contact@Example.COM </span>
+        <span data-testid="account-balance">₹1,234.50</span>
+        <span data-testid="empty-field"></span>
+      </div>
+    </details>
+
+    <div id="never-visible">hidden forever</div>
+  </body>
+</html>
