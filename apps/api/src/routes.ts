@@ -11,12 +11,13 @@ import type {
 } from '@billing-agent/core';
 import {
   assertJobDocument,
+  assertPublicHttpUrl,
   ConfigError,
   encryptSecret,
   parseMasterKey,
   verifyPassword,
 } from '@billing-agent/core';
-import { assertPublicHttpUrl, isWatchLocked } from '@billing-agent/price-monitor';
+import { isWatchLocked } from '@billing-agent/price-monitor';
 import { requireJwtAuth } from './auth.js';
 import { signAccessToken } from './jwt.js';
 

@@ -1,3 +1,4 @@
+export * from './assert-public-url.js';
 export * from './adapters/dummy.js';
 export * from './adapters/registry.js';
 export * from './adapters/tnpdcl.js';

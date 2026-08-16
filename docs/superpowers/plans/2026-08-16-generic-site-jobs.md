@@ -309,8 +309,8 @@ Shippable when: `engine: 'workflow'` job against `https://sivadass.in/` extracts
 - Move tests to `packages/core/tests/assert-public-url.test.ts`
 - Re-export from price-monitor for one slice so watches still compile
 
-- [ ] Same assertions as today’s price-monitor tests.
-- [ ] `npm run test -w @billing-agent/core`
+- [x] Same assertions as today’s price-monitor tests.
+- [x] `npm run test -w @billing-agent/core`
 
 ### Task 7: Workflow validate + interpreter
 
