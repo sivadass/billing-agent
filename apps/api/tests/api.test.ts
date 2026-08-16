@@ -822,6 +822,53 @@ describe('job URLs must pass the public-url check', () => {
       assert.equal(await store.getJob('ssrf'), null);
     });
 
+    it(`rejects an ntfy notify channel whose baseUrl is ${url} with 400`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id: 'ssrf-ntfy',
+            notify: {
+              title: 'Bill',
+              on: 'always',
+              channel: { type: 'ntfy', topic: 'bills', baseUrl: url },
+            },
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('ssrf-ntfy'), null);
+    });
+
+    it(`rejects a PATCH moving the ntfy baseUrl to ${url}`, async () => {
+      const store = new MemoryStore();
+      const { handle, user, token } = await setupAuthedServer({ store });
+      const original = canonicalAdapterJob({ userId: user.id });
+      await store.upsertJob(original);
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          notify: { channel: { type: 'ntfy', topic: 'bills', baseUrl: url } },
+        }),
+      });
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(await store.getJob('home-eb'), original);
+    });
+
     it(`rejects a webhook notify channel pointing at ${url} with 400`, async () => {
       const store = new MemoryStore();
       const { handle, token } = await setupAuthedServer({ store });
@@ -844,6 +891,66 @@ describe('job URLs must pass the public-url check', () => {
       assert.equal(await store.getJob('ssrf-webhook'), null);
     });
   }
+
+  it('accepts a public ntfy baseUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'public-ntfy',
+          notify: {
+            title: 'Bill',
+            on: 'always',
+            channel: {
+              type: 'ntfy',
+              topic: 'bills',
+              baseUrl: 'https://ntfy.example.com',
+            },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.notify.channel, {
+      type: 'ntfy',
+      topic: 'bills',
+      baseUrl: 'https://ntfy.example.com',
+    });
+  });
+
+  it('accepts an ntfy channel that omits baseUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'default-ntfy',
+          notify: {
+            title: 'Bill',
+            on: 'always',
+            channel: { type: 'ntfy', topic: 'bills' },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.notify.channel, { type: 'ntfy', topic: 'bills' });
+  });
 
   it('accepts a public https webhook channel', async () => {
     const { handle, token } = await setupAuthedServer();
@@ -872,6 +979,97 @@ describe('job URLs must pass the public-url check', () => {
       type: 'webhook',
       url: 'https://hooks.example.com/bill',
     });
+  });
+});
+
+describe('startUrl is required where the engine needs it', () => {
+  async function postWorkflowJob(
+    port: number,
+    token: string,
+    overrides: Record<string, unknown>,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'flow',
+        engine: 'workflow',
+        name: 'Flow',
+        goal: 'Read the price',
+        workflow: [{ id: 'goto', type: 'goto', url: 'https://sivadass.in/' }],
+        notify: { title: 'Flow', on: 'always', channel: { type: 'ntfy', topic: 'flow' } },
+        ...overrides,
+      }),
+    });
+  }
+
+  it('returns 400 when a workflow job omits startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await postWorkflowJob(handle.port, token, {});
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('flow'), null);
+  });
+
+  it('returns 400 when a workflow job sends an empty startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await postWorkflowJob(handle.port, token, { startUrl: '' });
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('flow'), null);
+  });
+
+  it('returns 400 when a workflow job sends a private startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await postWorkflowJob(handle.port, token, {
+      startUrl: 'http://127.0.0.1:9000/flow',
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('flow'), null);
+  });
+
+  it('creates a workflow job with a public startUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await postWorkflowJob(handle.port, token, {
+      startUrl: 'https://sivadass.in/',
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'workflow');
+    assert.equal(created.startUrl, 'https://sivadass.in/');
+  });
+
+  it('still creates an adapter job without a startUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'adapter-no-url',
+        engine: 'adapter',
+        adapterId: 'dummy',
+        notify: { title: 'Dummy Bill' },
+      }),
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(((await response.json()) as JobDocument).startUrl, '');
   });
 });
 
@@ -906,12 +1104,25 @@ describe('PATCH /jobs/:id validates only what the caller supplies', () => {
       { notify: { channel: { type: 'webhook', url: 'http://localhost/hook' } } },
       { startUrl: 'file:///etc/passwd' },
       { startUrl: 'http://169.254.169.254/latest/meta-data/' },
+      { startUrl: '' },
     ]) {
       const response = await patchJob(handle.port, token, body);
       assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(body)}`);
     }
 
     assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('refuses to clear the startUrl of a migrated fixture job', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/dummy-bill.html';
+    await store.upsertJob(canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }));
+
+    const response = await patchJob(handle.port, token, { startUrl: '' });
+
+    assert.equal(response.status, 400);
+    assert.equal((await store.getJob('home-eb'))?.startUrl, fixtureUrl);
   });
 
   it('keeps a migrated fixture startUrl when startUrl is not supplied', async () => {

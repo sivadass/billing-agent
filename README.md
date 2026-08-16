@@ -191,13 +191,69 @@ curl -X POST http://localhost:8080/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "id": "smoke-test",
-    "provider": "dummy",
+    "name": "Dummy Bill",
+    "engine": "adapter",
+    "adapterId": "dummy",
     "enabled": true,
     "schedule": null,
-    "credentialsEnv": {},
-    "notify": { "title": "Dummy Bill" }
+    "notify": {
+      "title": "Dummy Bill",
+      "on": "always",
+      "channel": { "type": "ntfy", "topic": "bills" }
+    }
   }'
 ```
+
+A `workflow` job replaces `adapterId` with a `startUrl` plus `schema` /
+`workflow` steps:
+
+```bash
+curl -X POST http://localhost:8080/jobs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "shoe-price",
+    "name": "Shoe price",
+    "engine": "workflow",
+    "startUrl": "https://sivadass.in/",
+    "goal": "Read the listed price",
+    "schema": [{ "name": "price", "type": "number" }],
+    "workflow": [{ "id": "open", "type": "goto", "url": "https://sivadass.in/" }],
+    "notify": { "title": "Shoe price" }
+  }'
+```
+
+Notes on the payload:
+
+- The old `provider` spelling is still accepted as an alias for `adapterId` so
+  existing clients keep working, but it is never stored or returned — responses
+  are canonical (`engine`, `adapterId`, `startUrl`, `result`).
+- Omitted fields fall back to defaults (`notify.on` to `always`, `notify.channel`
+  to ntfy). A field that *is* supplied must be valid: a bad `enabled`,
+  `notify.on`, or channel is a `400` rather than a silent default.
+- `startUrl`, a `webhook` channel `url`, and an ntfy `baseUrl` must be public
+  http(s) URLs; localhost, private and link-local ranges, the cloud metadata
+  address, and `.local` / `.internal` hosts are rejected. A `workflow` job must
+  supply a `startUrl`.
+- `secretIds`, `lastResult`, `userId`, and the timestamps are server-owned and
+  ignored if sent.
+
+Secrets are write-only. `GET /jobs/:id/secrets` lists key names only, and
+`PUT /jobs/:id/secrets` stores new values encrypted with `SECRETS_MASTER_KEY`
+(omitted keys keep their current value; a re-sent key is re-encrypted in place):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/jobs/smoke-test/secrets
+# {"keys":[{"key":"TNPDCL_PASSWORD","set":true}]}
+
+curl -X PUT http://localhost:8080/jobs/smoke-test/secrets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "values": { "TNPDCL_PASSWORD": "new-password" } }'
+```
+
+Stored values are never returned by any endpoint, and the write is rejected with
+`409` while that job has a run in flight.
 
 ## Postman collection
 
@@ -212,7 +268,7 @@ Collection variables:
 - `jobId` (default `smoke-test`)
 - `runId` (set after listing runs)
 
-The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
+The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`, `/jobs/:id/secrets`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
 
 ## Price monitor notes
 

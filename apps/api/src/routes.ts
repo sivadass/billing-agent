@@ -173,13 +173,30 @@ function coerceJobDocument(
   // SSRF: only what the caller actually sent is checked. A migrated adapter job
   // whose stored `startUrl` is a `file://` fixture stays editable as long as the
   // caller does not send a new one; a caller-supplied `file://` is rejected.
-  if (typeof payload.startUrl === 'string' && payload.startUrl.length > 0) {
-    assertPublicHttpUrl(job.startUrl);
+  if (payload.startUrl !== undefined) {
+    if (job.startUrl) {
+      assertPublicHttpUrl(job.startUrl);
+    } else if (fallback) {
+      // Clearing it would strand the job, and on a migrated job it would also
+      // erase the only record of where it used to run.
+      throw new ConfigError('job.startUrl must not be cleared');
+    }
   }
+  // Adapters carry their own start URL, so only a workflow needs one supplied.
+  if (!fallback && job.engine === 'workflow' && !job.startUrl) {
+    throw new ConfigError('job.startUrl is required for a workflow job');
+  }
+
   const channelSupplied =
     isObject(payload.notify) && payload.notify.channel !== undefined;
-  if (channelSupplied && job.notify.channel.type === 'webhook') {
-    assertPublicHttpUrl(job.notify.channel.url);
+  if (channelSupplied) {
+    if (job.notify.channel.type === 'webhook') {
+      assertPublicHttpUrl(job.notify.channel.url);
+    }
+    // `baseUrl` is an outbound sink too: the notifier POSTs to it directly.
+    if (job.notify.channel.type === 'ntfy' && job.notify.channel.baseUrl !== undefined) {
+      assertPublicHttpUrl(job.notify.channel.baseUrl);
+    }
   }
 
   return job;
