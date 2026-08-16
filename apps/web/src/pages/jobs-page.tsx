@@ -1,4 +1,4 @@
-import { Alert, Button, PageHeader } from 'cleanplate';
+import { Alert, PageHeader } from 'cleanplate';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { JobsTable } from '../components/jobs-table';
@@ -76,12 +76,7 @@ export function JobsPage() {
     <>
       <PageHeader
         title="Jobs"
-        subtitle="Manage billing jobs, schedules, and manual runs."
-        primaryCta={
-          <Button variant="solid" onClick={() => navigate('/jobs/new')}>
-            New job
-          </Button>
-        }
+        subtitle="Manage jobs, schedules, and manual runs."
       />
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
       {actionError ? (

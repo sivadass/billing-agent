@@ -14,5 +14,6 @@ export * from './notify.js';
 export * from './overlay.js';
 export * from './recovery.js';
 export * from './secrets.js';
+export * from './store/assert-job.js';
 export * from './store/mongo.js';
 export * from './store/types.js';

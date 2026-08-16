@@ -289,10 +289,10 @@ billing-agent migrate-generic-jobs
 
 Jobs table column **Provider** → **Engine** (`adapter:tnpdcl` or `workflow`). Job form: hide `credentialsEnv`; show read-only engine; notify title + ntfy topic fields; write-only secret inputs (`PUT /jobs/:id/secrets`). Keep watches UI working against old `/watches` until slice 5.
 
-- [ ] API tests: POST job with `engine: 'adapter'` succeeds; POST with unknown engine 400.
-- [ ] API tests: `PUT /jobs/:id/secrets` encrypts; `GET` returns `{ key, set: true }` only (no ciphertext). Second PUT of the same key updates ciphertext (upsert). Empty string → 400. Other user’s job → 404.
-- [ ] Web: run detail shows key/value from `result`.
-- [ ] `npm run test -w @billing-agent/api` and `npm run test -w @billing-agent/web`
+- [x] API tests: POST job with `engine: 'adapter'` succeeds; POST with unknown engine 400.
+- [x] API tests: `PUT /jobs/:id/secrets` encrypts; `GET` returns `{ key, set: true }` only (no ciphertext). Second PUT of the same key updates ciphertext (upsert). Empty string → 400. Other user’s job → 404.
+- [x] Web: run detail shows key/value from `result`.
+- [x] `npm run test -w @billing-agent/api` and `npm run test -w @billing-agent/web`
 
 **Slice 1 exit:** dummy adapter job runs in CI; types no longer mention `credentialsEnv` / `billSummary` / `provider` on `JobDocument` / `RunDocument`.
 

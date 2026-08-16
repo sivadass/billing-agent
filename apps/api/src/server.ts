@@ -10,6 +10,8 @@ export type StartServerInput = {
   corsOrigins?: string[];
   onRunJob?: (jobId: string) => Promise<string>;
   onRunWatch?: (watchId: string) => Promise<string>;
+  /** Source of `SECRETS_MASTER_KEY` for the job secrets routes. */
+  env?: NodeJS.ProcessEnv;
 };
 
 export type ApiServerHandle = {
@@ -29,6 +31,7 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
       store: input.store,
       onRunJob: input.onRunJob,
       onRunWatch: input.onRunWatch,
+      env: input.env ?? process.env,
     }).catch(
       (error: unknown) => {
         res.statusCode = 500;

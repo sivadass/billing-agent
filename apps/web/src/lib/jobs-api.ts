@@ -1,5 +1,5 @@
 import { ApiClientError, apiFetch } from './api-client';
-import type { JobDocument } from './types';
+import type { JobDocument, JobPatch, JobSecretKey } from './types';
 
 type RunJobNowResponse = {
   id: string;
@@ -37,17 +37,10 @@ export async function getJob(id: string): Promise<JobDocument> {
   return parseJson<JobDocument>(response);
 }
 
-export async function createJob(job: JobDocument): Promise<JobDocument> {
-  const response = await apiFetch('/jobs', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(job),
-  });
-  await throwForNonOk(response);
-  return parseJson<JobDocument>(response);
-}
-
-export async function updateJob(id: string, patch: Partial<JobDocument>): Promise<JobDocument> {
+export async function updateJob(
+  id: string,
+  patch: Partial<JobPatch>,
+): Promise<JobDocument> {
   const response = await apiFetch(`/jobs/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
@@ -63,6 +56,26 @@ export async function disableJob(id: string): Promise<JobDocument> {
   });
   await throwForNonOk(response);
   return parseJson<JobDocument>(response);
+}
+
+export async function getJobSecrets(id: string): Promise<JobSecretKey[]> {
+  const response = await apiFetch(`/jobs/${encodeURIComponent(id)}/secrets`);
+  await throwForNonOk(response);
+  return (await parseJson<{ keys: JobSecretKey[] }>(response)).keys;
+}
+
+/** Write-only: values leave the browser and never come back. */
+export async function updateJobSecrets(
+  id: string,
+  values: Record<string, string>,
+): Promise<JobSecretKey[]> {
+  const response = await apiFetch(`/jobs/${encodeURIComponent(id)}/secrets`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ values }),
+  });
+  await throwForNonOk(response);
+  return (await parseJson<{ keys: JobSecretKey[] }>(response)).keys;
 }
 
 export async function runJobNow(id: string): Promise<RunJobNowResponse> {

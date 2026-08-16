@@ -1,12 +1,21 @@
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
   BillingStore,
   JobDocument,
   PriceSource,
+  RunDocument,
+  SecretDocument,
   SettingsDocument,
   WatchDocument,
 } from '@billing-agent/core';
-import { verifyPassword } from '@billing-agent/core';
+import {
+  assertJobDocument,
+  ConfigError,
+  encryptSecret,
+  parseMasterKey,
+  verifyPassword,
+} from '@billing-agent/core';
 import { assertPublicHttpUrl, isWatchLocked } from '@billing-agent/price-monitor';
 import { requireJwtAuth } from './auth.js';
 import { signAccessToken } from './jwt.js';
@@ -17,6 +26,7 @@ export type RouteContext = {
   onRunJob?: (jobId: string) => Promise<string>;
   onRunWatch?: (watchId: string) => Promise<string>;
   authUser?: { id: string; email: string };
+  env?: NodeJS.ProcessEnv;
 };
 
 const DEFAULT_WATCH_SCHEDULE = '0 9 * * *';
@@ -115,10 +125,12 @@ function coerceJobDocument(
   userId: string,
   fallback?: JobDocument,
 ): JobDocument {
-  if (!isObject(payload)) throw new Error('job payload must be an object');
+  if (!isObject(payload)) throw new ConfigError('job payload must be an object');
   const base = fallback ?? defaultJobDocument(userId);
   const now = new Date().toISOString();
 
+  // `provider` is the pre-generic-jobs spelling of `adapterId`; still accepted
+  // on the wire so older clients keep working, never stored or returned.
   const adapterId =
     typeof payload.adapterId === 'string'
       ? payload.adapterId
@@ -126,18 +138,13 @@ function coerceJobDocument(
         ? payload.provider
         : base.adapterId;
 
-  const engine =
-    payload.engine === 'workflow' || payload.engine === 'adapter'
-      ? payload.engine
-      : base.engine;
-
   const notify = coerceNotify(payload, base.notify);
   const name =
-    typeof payload.name === 'string'
+    typeof payload.name === 'string' && payload.name
       ? payload.name
       : notify.title || base.name;
 
-  const job: JobDocument = {
+  const job = assertJobDocument({
     id: typeof payload.id === 'string' ? payload.id : base.id,
     userId,
     name,
@@ -147,25 +154,75 @@ function coerceJobDocument(
         ? payload.schedule
         : base.schedule,
     startUrl: typeof payload.startUrl === 'string' ? payload.startUrl : base.startUrl,
-    engine,
-    ...(adapterId ? { adapterId } : {}),
+    engine: payload.engine === undefined ? base.engine : payload.engine,
+    ...(adapterId === undefined ? {} : { adapterId }),
     goal: typeof payload.goal === 'string' ? payload.goal : base.goal,
-    schema: base.schema,
-    workflow: base.workflow,
+    schema: payload.schema === undefined ? base.schema : payload.schema,
+    workflow: payload.workflow === undefined ? base.workflow : payload.workflow,
+    // Owned by PUT /jobs/:id/secrets and the worker respectively.
     secretIds: base.secretIds,
     notify,
     lastResult: base.lastResult,
     createdAt:
       typeof payload.createdAt === 'string' ? payload.createdAt : base.createdAt,
     updatedAt: now,
-  };
+  });
 
-  if (!job.id) throw new Error('job.id is required');
   if (job.engine === 'adapter' && !job.adapterId) {
-    throw new Error('job.adapterId or provider is required');
+    throw new ConfigError('job.adapterId or provider is required');
   }
-  if (!job.notify.title) throw new Error('job.notify.title is required');
+  // A slash would make `/jobs/{id}` ambiguous with subresources like
+  // `/jobs/{id}/secrets`.
+  if (job.id.includes('/')) {
+    throw new ConfigError('job.id must not contain "/"');
+  }
   return job;
+}
+
+function toJobResponse(job: JobDocument): JobDocument {
+  return {
+    id: job.id,
+    userId: job.userId,
+    name: job.name,
+    enabled: job.enabled,
+    schedule: job.schedule ?? null,
+    startUrl: job.startUrl,
+    engine: job.engine,
+    ...(job.adapterId === undefined ? {} : { adapterId: job.adapterId }),
+    goal: job.goal,
+    schema: job.schema,
+    workflow: job.workflow,
+    secretIds: job.secretIds,
+    notify: job.notify,
+    lastResult: job.lastResult ?? null,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+/**
+ * Serializes only the canonical run fields, so a document still carrying
+ * pre-migration `provider` / `billSummary` keys can never leak them.
+ */
+function toRunResponse(run: RunDocument): RunDocument {
+  return {
+    id: run.id,
+    jobId: run.jobId,
+    userId: run.userId,
+    engine: run.engine,
+    ...(run.adapterId === undefined ? {} : { adapterId: run.adapterId }),
+    status: run.status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt ?? null,
+    durationMs: run.durationMs ?? null,
+    errorCode: run.errorCode ?? null,
+    errorMessage: run.errorMessage ?? null,
+    screenshotPath: run.screenshotPath ?? null,
+    recoveryAttempted: run.recoveryAttempted === true,
+    recoverySucceeded: run.recoverySucceeded === true,
+    overlayActivated: run.overlayActivated === true,
+    result: run.result ?? null,
+  };
 }
 
 function coerceWatchDocument(
@@ -226,6 +283,123 @@ function coerceWatchDocument(
   if (!watch.url) throw new Error('watch.url is required');
   assertPublicHttpUrl(watch.url);
   return watch;
+}
+
+/**
+ * Matches `/jobs/{id}/{suffix}` for a single path segment id, so a job
+ * subresource is never mistaken for a job id by the `/jobs/:id` routes.
+ */
+function parseJobSubresourceId(pathname: string, suffix: string): string | null {
+  if (!pathname.startsWith('/jobs/') || !pathname.endsWith(suffix)) return null;
+  const rawId = pathname.slice('/jobs/'.length, -suffix.length);
+  if (!rawId || rawId.includes('/')) return null;
+  return decodeURIComponent(rawId);
+}
+
+/**
+ * Parses `{ values: Record<string, string> }`. Error messages name the key
+ * only — a secret value must never reach a response body or a log line.
+ */
+function parseSecretValues(body: unknown): Record<string, string> {
+  if (!isObject(body)) {
+    throw new ConfigError('request body must be an object');
+  }
+  if (!isObject(body.values)) {
+    throw new ConfigError('values must be an object of string values');
+  }
+  const values: Record<string, string> = {};
+  for (const [key, value] of Object.entries(body.values)) {
+    if (!key.trim()) {
+      throw new ConfigError('values keys must be non-empty');
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new ConfigError(`values.${key} must be a non-empty string`);
+    }
+    values[key] = value;
+  }
+  return values;
+}
+
+async function listSecretKeys(
+  store: BillingStore,
+  userId: string,
+  jobId: string,
+): Promise<Array<{ key: string; set: true }>> {
+  const secrets = await store.listSecrets({ userId, jobId });
+  return secrets
+    .map((secret) => ({ key: secret.key, set: true as const }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+async function handleJobSecrets(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: RouteContext,
+  userId: string,
+  jobId: string,
+  method: string,
+): Promise<void> {
+  const job = await ctx.store.getJob(jobId);
+  if (!job || job.userId !== userId) {
+    sendJson(res, 404, { error: 'Job not found' });
+    return;
+  }
+
+  if (method === 'GET') {
+    sendJson(res, 200, { keys: await listSecretKeys(ctx.store, userId, jobId) });
+    return;
+  }
+
+  let values: Record<string, string>;
+  try {
+    values = parseSecretValues(await readJsonBody(req));
+  } catch (error) {
+    sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+
+  const recentRuns = await ctx.store.listRuns({ userId, jobId, limit: 20 });
+  if (recentRuns.some((run) => run.status === 'running')) {
+    sendJson(res, 409, { error: 'Job already running' });
+    return;
+  }
+
+  const entries = Object.entries(values);
+  if (entries.length > 0) {
+    // Only touch the master key when there is something to encrypt.
+    const masterKey = parseMasterKey(ctx.env ?? process.env);
+    const existing = await ctx.store.listSecrets({ userId, jobId });
+    const existingByKey = new Map(existing.map((secret) => [secret.key, secret]));
+    const now = new Date().toISOString();
+
+    for (const [key, value] of entries) {
+      const previous = existingByKey.get(key);
+      const secret: SecretDocument = {
+        id: previous?.id ?? randomUUID(),
+        userId,
+        jobId,
+        conversationId: null,
+        key,
+        ...encryptSecret(value, masterKey),
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now,
+      };
+      await ctx.store.upsertSecret(secret);
+    }
+
+    const secretIds = (await ctx.store.listSecrets({ userId, jobId })).map(
+      (secret) => secret.id,
+    );
+    const unchanged =
+      secretIds.length === job.secretIds.length &&
+      secretIds.every((id) => job.secretIds.includes(id));
+    if (!unchanged) {
+      await ctx.store.upsertJob({ ...job, secretIds, updatedAt: now });
+      await bumpJobsGeneration(ctx.store);
+    }
+  }
+
+  sendJson(res, 200, { keys: await listSecretKeys(ctx.store, userId, jobId) });
 }
 
 async function bumpJobsGeneration(store: BillingStore): Promise<void> {
@@ -321,7 +495,7 @@ export async function handleRoute(
       jobId,
       limit: Number.isFinite(limit) ? limit : undefined,
     });
-    sendJson(res, 200, runs);
+    sendJson(res, 200, runs.map((run) => toRunResponse(run)));
     return;
   }
 
@@ -332,23 +506,32 @@ export async function handleRoute(
       sendJson(res, 404, { error: 'Run not found' });
       return;
     }
-    sendJson(res, 200, run);
+    sendJson(res, 200, toRunResponse(run));
     return;
   }
 
   if (method === 'GET' && pathname === '/jobs') {
     const jobs = await ctx.store.listJobs({ userId: user.userId });
-    sendJson(res, 200, jobs);
+    sendJson(res, 200, jobs.map((job) => toJobResponse(job)));
     return;
   }
 
+  // Must stay ahead of the `/jobs/:id` routes, which would otherwise read
+  // `:id/secrets` as a job id.
+  if (method === 'GET' || method === 'PUT') {
+    const secretsJobId = parseJobSubresourceId(pathname, '/secrets');
+    if (secretsJobId) {
+      await handleJobSecrets(req, res, ctx, user.userId, secretsJobId, method);
+      return;
+    }
+  }
+
   if (method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/run')) {
-    const rawJobId = pathname.slice('/jobs/'.length, -'/run'.length);
-    if (!rawJobId || rawJobId.endsWith('/') || rawJobId.includes('/')) {
+    const jobId = parseJobSubresourceId(pathname, '/run');
+    if (!jobId) {
       sendJson(res, 404, { error: 'Not found' });
       return;
     }
-    const jobId = decodeURIComponent(rawJobId);
     if (!ctx.onRunJob) {
       sendJson(res, 503, { error: 'Runner unavailable' });
       return;
@@ -379,16 +562,22 @@ export async function handleRoute(
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
-    sendJson(res, 200, job);
+    sendJson(res, 200, toJobResponse(job));
     return;
   }
 
   if (method === 'POST' && pathname === '/jobs') {
     const body = await readJsonBody(req);
-    const job = coerceJobDocument(body, user.userId);
+    let job: JobDocument;
+    try {
+      job = coerceJobDocument(body, user.userId);
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     await ctx.store.upsertJob(job);
     await bumpJobsGeneration(ctx.store);
-    sendJson(res, 201, job);
+    sendJson(res, 201, toJobResponse(job));
     return;
   }
 
@@ -401,14 +590,20 @@ export async function handleRoute(
     }
     const body = await readJsonBody(req);
     const patch = isObject(body) ? body : {};
-    const merged = coerceJobDocument(
-      { ...existing, ...patch, id: jobId },
-      existing.userId,
-      existing,
-    );
+    let merged: JobDocument;
+    try {
+      merged = coerceJobDocument(
+        { ...existing, ...patch, id: jobId },
+        existing.userId,
+        existing,
+      );
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     await ctx.store.upsertJob(merged);
     await bumpJobsGeneration(ctx.store);
-    sendJson(res, 200, merged);
+    sendJson(res, 200, toJobResponse(merged));
     return;
   }
 
@@ -422,7 +617,7 @@ export async function handleRoute(
     const disabled = { ...existing, enabled: false };
     await ctx.store.upsertJob(disabled);
     await bumpJobsGeneration(ctx.store);
-    sendJson(res, 200, disabled);
+    sendJson(res, 200, toJobResponse(disabled));
     return;
   }
 

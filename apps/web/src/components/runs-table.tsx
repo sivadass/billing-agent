@@ -1,4 +1,5 @@
 import { Badge, Table } from 'cleanplate';
+import { engineLabel } from '../lib/engine-label';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
 import type { RunDocument } from '../lib/types';
 
@@ -10,7 +11,7 @@ type RunsTableProps = {
 type RunsTableRow = {
   id: string;
   jobId: string;
-  provider: string;
+  engine: string;
   status: RunDocument['status'];
   statusLabel: string;
   startedAtLabel: string;
@@ -37,7 +38,7 @@ export function RunsTable({ runs, onSelectRun }: RunsTableProps) {
     return {
       id: run.id,
       jobId: run.jobId,
-      provider: run.provider,
+      engine: engineLabel(run),
       status: run.status,
       statusLabel: run.status,
       startedAtLabel,
@@ -52,7 +53,7 @@ export function RunsTable({ runs, onSelectRun }: RunsTableProps) {
       columns={[
         { id: 'id', title: 'Run id' },
         { id: 'jobId', title: 'Job' },
-        { id: 'provider', title: 'Provider' },
+        { id: 'engine', title: 'Engine' },
         {
           id: 'status',
           title: 'Status',
@@ -86,7 +87,7 @@ export function RunsTable({ runs, onSelectRun }: RunsTableProps) {
         title: 'id',
         subtitle: (raw) => {
           const row = raw as RunsTableRow;
-          return `${row.jobId} · ${row.provider}`;
+          return `${row.jobId} · ${row.engine}`;
         },
         meta: (raw) => {
           const row = raw as RunsTableRow;
