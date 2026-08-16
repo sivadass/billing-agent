@@ -170,8 +170,8 @@ function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
 
 Legacy runs: `billSummary` → `result`, `provider` → `adapterId`, `engine: 'adapter'`.
 
-- [ ] **Step 5:** Fix compile errors in job-runner/config/api by mapping `job.adapterId ?? job.provider` temporarily **only inside this task if needed**; prefer finishing Task 2–3 in the same slice so `provider` is gone from call sites.
-- [ ] **Step 6:** `npm run test -w @billing-agent/core` — existing tests updated to new job fixtures (`packages/core/tests/fixtures/jobs.valid.json`).
+- [x] **Step 5:** Fix compile errors in job-runner/config/api by mapping `job.adapterId ?? job.provider` temporarily **only inside this task if needed**; prefer finishing Task 2–3 in the same slice so `provider` is gone from call sites.
+- [x] **Step 6:** `npm run test -w @billing-agent/core` — existing tests updated to new job fixtures (`packages/core/tests/fixtures/jobs.valid.json`).
 
 **Done when:** core compiles; dummy fixture job uses `engine: 'adapter'`, `adapterId: 'dummy'`.
 
