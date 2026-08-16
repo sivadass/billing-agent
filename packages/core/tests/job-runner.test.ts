@@ -448,8 +448,8 @@ describe('runJob', () => {
     }
 
     const joined = consoleLines.join('\n');
-    assert.doesNotMatch(joined, new RegExp(plaintext));
-    assert.doesNotMatch(joined, new RegExp(encrypted.ciphertext));
+    assert.equal(joined.includes(plaintext), false);
+    assert.equal(joined.includes(encrypted.ciphertext), false);
   });
 
   it('uses the job notify channel topic when non-empty, overriding the global default', async () => {
