@@ -6,8 +6,21 @@ import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
 import { ConfigError, LoginError } from '../src/errors.ts';
-import type { BillingStore, RunDocument } from '../src/store/types.ts';
-import { runJob, runJobs } from '../src/job-runner.ts';
+import { encryptSecret } from '../src/secrets.ts';
+import type { BillingStore, RunDocument, SecretDocument } from '../src/store/types.ts';
+import { billResultToRecord, runJob, runJobs } from '../src/job-runner.ts';
+
+const TEST_MASTER_KEY_HEX =
+  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const TEST_MASTER_KEY = Buffer.from(TEST_MASTER_KEY_HEX, 'hex');
+
+const billSchema: JobConfig['schema'] = [
+  { key: 'amount', label: 'Amount', type: 'price' },
+  { key: 'dueDate', label: 'Due', type: 'date' },
+  { key: 'billPeriod', label: 'Period', type: 'string' },
+  { key: 'status', label: 'Status', type: 'string' },
+  { key: 'accountLabel', label: 'Account', type: 'string' },
+];
 
 const job: JobConfig = {
   id: 'fake-job',
@@ -19,7 +32,7 @@ const job: JobConfig = {
   engine: 'adapter',
   adapterId: 'fake',
   goal: '',
-  schema: [],
+  schema: billSchema,
   workflow: [],
   secretIds: [],
   notify: {
@@ -30,7 +43,6 @@ const job: JobConfig = {
   lastResult: null,
   createdAt: '2026-08-16T00:00:00.000Z',
   updatedAt: '2026-08-16T00:00:00.000Z',
-  credentialsEnv: { username: 'FAKE_JOB_USERNAME' },
 };
 
 const app: AppConfig = {
@@ -47,7 +59,6 @@ const app: AppConfig = {
     saveErrorScreenshot: false,
   },
   jobs: [job],
-  legacySeedCredentials: {},
 };
 
 const testEnv = { FAKE_JOB_USERNAME: 'test-user' };
@@ -58,6 +69,84 @@ const billResult: BillResult = {
   dueDate: '2026-08-20',
   accountLabel: '****1234',
 };
+
+function makeSecretDoc(overrides: Partial<SecretDocument> = {}): SecretDocument {
+  return {
+    id: 'secret-1',
+    userId: 'user-1',
+    jobId: 'fake-job',
+    conversationId: null,
+    key: 'username',
+    ciphertext: '',
+    iv: '',
+    tag: '',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** Minimal BillingStore stub: runs are discarded, secrets come from the given fixed list. */
+function storeWithSecrets(secrets: SecretDocument[]): BillingStore {
+  return {
+    async createRun() {},
+    async finishRun() {},
+    async listActiveOverlays() {
+      return [];
+    },
+    async listSecrets(options) {
+      return secrets.filter(
+        (secret) =>
+          secret.userId === options.userId &&
+          (options.jobId === undefined || secret.jobId === options.jobId),
+      );
+    },
+  } as unknown as BillingStore;
+}
+
+describe('billResultToRecord', () => {
+  it('maps required fields and never includes provider or notify', () => {
+    const record = billResultToRecord({
+      provider: 'fake',
+      amount: '₹1',
+      accountLabel: '****1',
+      notify: false,
+    });
+    assert.deepEqual(record, { amount: '₹1', accountLabel: '****1' });
+    assert.equal('provider' in record, false);
+    assert.equal('notify' in record, false);
+  });
+
+  it('includes optional fields only when present', () => {
+    const record = billResultToRecord({
+      provider: 'fake',
+      amount: '₹1',
+      accountLabel: '****1',
+      dueDate: '2026-08-20',
+      billPeriod: 'Jul-Aug',
+      status: 'unpaid',
+      rawNotes: 'note',
+    });
+    assert.deepEqual(record, {
+      amount: '₹1',
+      accountLabel: '****1',
+      dueDate: '2026-08-20',
+      billPeriod: 'Jul-Aug',
+      status: 'unpaid',
+      rawNotes: 'note',
+    });
+  });
+
+  it('omits optional fields when falsy/absent', () => {
+    const record = billResultToRecord({
+      provider: 'fake',
+      amount: '₹1',
+      accountLabel: '****1',
+      dueDate: '',
+    });
+    assert.deepEqual(record, { amount: '₹1', accountLabel: '****1' });
+  });
+});
 
 describe('runJob', () => {
   it('invokes onRunCreated with run id after createRun', async () => {
@@ -127,6 +216,47 @@ describe('runJob', () => {
     });
 
     assert.equal(runs[0]?.userId, job.userId);
+  });
+
+  it('writes result.amount (generic result), never billSummary or provider, on adapter success', async () => {
+    const runUpdates: Array<Partial<RunDocument>> = [];
+    const store = {
+      async createRun() {},
+      async finishRun(_id: string, update: Partial<RunDocument>) {
+        runUpdates.push(update);
+      },
+      async listActiveOverlays() {
+        return [];
+      },
+      async listSecrets() {
+        return [];
+      },
+    } as unknown as BillingStore;
+
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    const result = await runJob(app, job, {
+      env: testEnv,
+      store,
+      getAdapter: () => adapter,
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async () => {},
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(runUpdates.at(-1)?.result, {
+      amount: '₹123.45',
+      dueDate: '2026-08-20',
+      accountLabel: '****1234',
+    });
+    assert.equal((runUpdates.at(-1)?.result as Record<string, unknown>)?.provider, undefined);
+    assert.equal((runUpdates.at(-1)?.result as Record<string, unknown>)?.billSummary, undefined);
+    assert.equal('billSummary' in (runUpdates.at(-1) ?? {}), false);
   });
 
   it('attempts one recovery and records overlay success after retry succeeds', async () => {
@@ -234,7 +364,13 @@ describe('runJob', () => {
     assert.equal(recoveryCalls, 0);
   });
 
-  it('resolves job credentials and sends a success notification with the configured priority', async () => {
+  it('resolves job secrets from the store and passes them as adapter credentials', async () => {
+    const encrypted = encryptSecret('test-user', TEST_MASTER_KEY);
+    const store = storeWithSecrets([
+      makeSecretDoc({ id: 'secret-1', key: 'username', ...encrypted }),
+    ]);
+    const jobWithSecret: JobConfig = { ...job, secretIds: ['secret-1'] };
+
     const notifications: Array<Record<string, unknown>> = [];
     const adapter: BillingAdapter = {
       id: 'fake',
@@ -245,9 +381,95 @@ describe('runJob', () => {
       },
     };
 
-    const result = await runJob(app, job, {
-      withBrowser: async (_config, callback) =>
-        callback({} as Page),
+    const result = await runJob(app, jobWithSecret, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async (options) => {
+        notifications.push(options);
+      },
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: { ...testEnv, SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX },
+      store,
+    });
+
+    assert.deepEqual(result, { ok: true, result: billResult });
+    assert.deepEqual(notifications, [
+      {
+        baseUrl: app.ntfy.baseUrl,
+        topic: app.ntfy.topic,
+        title: job.notify.title,
+        body: 'Amount: ₹123.45\nDue: 2026-08-20\nAccount: ****1234',
+        priority: app.ntfy.priority,
+      },
+    ]);
+  });
+
+  it('never logs plaintext or ciphertext secret values', async () => {
+    const plaintext = 'super-secret-plaintext-value';
+    const encrypted = encryptSecret(plaintext, TEST_MASTER_KEY);
+    const store = storeWithSecrets([
+      makeSecretDoc({ id: 'secret-1', key: 'password', ...encrypted }),
+    ]);
+    const jobWithSecret: JobConfig = { ...job, secretIds: ['secret-1'] };
+
+    const consoleLines: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (...args: unknown[]) => {
+      consoleLines.push(args.map(String).join(' '));
+    };
+    console.error = (...args: unknown[]) => {
+      consoleLines.push(args.map(String).join(' '));
+    };
+
+    try {
+      const adapter: BillingAdapter = {
+        id: 'fake',
+        async run() {
+          return billResult;
+        },
+      };
+
+      await runJob(app, jobWithSecret, {
+        withBrowser: async (_config, callback) => callback({} as Page),
+        sendNtfy: async () => {},
+        createMistralCaptchaSolver: () => ({
+          solveFromImageBase64: async () => 'captcha',
+        }),
+        getAdapter: () => adapter,
+        env: { ...testEnv, SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX },
+        store,
+      });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    const joined = consoleLines.join('\n');
+    assert.doesNotMatch(joined, new RegExp(plaintext));
+    assert.doesNotMatch(joined, new RegExp(encrypted.ciphertext));
+  });
+
+  it('uses the job notify channel topic when non-empty, overriding the global default', async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const customTopicJob: JobConfig = {
+      ...job,
+      notify: {
+        ...job.notify,
+        channel: { type: 'ntfy', topic: 'custom-topic', baseUrl: 'https://custom.ntfy' },
+      },
+    };
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    await runJob(app, customTopicJob, {
+      withBrowser: async (_config, callback) => callback({} as Page),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -258,17 +480,100 @@ describe('runJob', () => {
       env: testEnv,
     });
 
-    assert.deepEqual(result, { ok: true, result: billResult });
-    assert.deepEqual(notifications, [
-      {
-        baseUrl: app.ntfy.baseUrl,
-        topic: app.ntfy.topic,
-        title: job.notify.title,
-        body:
-          'Amount: ₹123.45\nDue: 2026-08-20\nAccount: ****1234',
-        priority: app.ntfy.priority,
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0]?.topic, 'custom-topic');
+    assert.equal(notifications[0]?.baseUrl, 'https://custom.ntfy');
+  });
+
+  it('falls back to the global ntfy topic/baseUrl when the job channel topic is empty', async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
       },
-    ]);
+    };
+
+    await runJob(app, job, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async (options) => {
+        notifications.push(options);
+      },
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+    });
+
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0]?.topic, app.ntfy.topic);
+    assert.equal(notifications[0]?.baseUrl, app.ntfy.baseUrl);
+  });
+
+  it('skips success notify for webhook channels (not implemented until slice 2)', async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const webhookJob: JobConfig = {
+      ...job,
+      notify: {
+        ...job.notify,
+        channel: { type: 'webhook', url: 'https://example.test/webhook' },
+      },
+    };
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    const result = await runJob(app, webhookJob, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async (options) => {
+        notifications.push(options);
+      },
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(notifications, []);
+  });
+
+  it('skips failure notify for webhook channels (not implemented until slice 2)', async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const webhookJob: JobConfig = {
+      ...job,
+      notify: {
+        ...job.notify,
+        channel: { type: 'webhook', url: 'https://example.test/webhook' },
+      },
+    };
+    const loginError = new LoginError('credentials rejected');
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        throw loginError;
+      },
+    };
+
+    const result = await runJob(app, webhookJob, {
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async (options) => {
+        notifications.push(options);
+      },
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+    });
+
+    assert.deepEqual(result, { ok: false, error: loginError });
+    assert.deepEqual(notifications, []);
   });
 
   it('skips success notification when result.notify is false', async () => {
@@ -327,7 +632,7 @@ describe('runJob', () => {
     assert.equal(solverFactoryCalls, 0);
   });
 
-  it('returns a login error and sends a high-priority failure notification', async () => {
+  it('returns a login error and sends a high-priority failure notification titled "{notify.title} failed"', async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const loginError = new LoginError('credentials rejected');
     const adapter: BillingAdapter = {
@@ -355,7 +660,7 @@ describe('runJob', () => {
       {
         baseUrl: app.ntfy.baseUrl,
         topic: app.ntfy.topic,
-        title: 'Billing agent failed: fake-job',
+        title: 'Fake bill failed',
         body:
           'Job: fake-job\nError: LoginError\ncredentials rejected',
         priority: 'high',
@@ -485,32 +790,42 @@ describe('runJobs', () => {
     );
   });
 
-  it('runs all enabled jobs and continues after failures', async () => {
+  it('runs all enabled jobs and continues after failures, resolving per-job secrets', async () => {
     const attempted: string[] = [];
+    const secretDocs: SecretDocument[] = [
+      makeSecretDoc({
+        id: 'secret-fails',
+        jobId: 'fails',
+        key: 'marker',
+        ...encryptSecret('fails', TEST_MASTER_KEY),
+      }),
+      makeSecretDoc({
+        id: 'secret-succeeds',
+        jobId: 'succeeds',
+        key: 'marker',
+        ...encryptSecret('succeeds', TEST_MASTER_KEY),
+      }),
+      makeSecretDoc({
+        id: 'secret-disabled',
+        jobId: 'disabled',
+        key: 'marker',
+        ...encryptSecret('disabled', TEST_MASTER_KEY),
+      }),
+    ];
+    const store = storeWithSecrets(secretDocs);
     const jobs: JobConfig[] = [
-      {
-        ...job,
-        id: 'fails',
-        credentialsEnv: { marker: 'FAILS_MARKER' },
-      },
-      {
-        ...job,
-        id: 'succeeds',
-        credentialsEnv: { marker: 'SUCCEEDS_MARKER' },
-      },
-      {
-        ...job,
-        id: 'disabled',
-        enabled: false,
-        credentialsEnv: { marker: 'DISABLED_MARKER' },
-      },
+      { ...job, id: 'fails', secretIds: ['secret-fails'] },
+      { ...job, id: 'succeeds', secretIds: ['secret-succeeds'] },
+      { ...job, id: 'disabled', enabled: false, secretIds: ['secret-disabled'] },
     ];
     const adapter: BillingAdapter = {
       id: 'fake',
       async run(context) {
         const marker = context.credentials.marker;
         attempted.push(marker);
-        if (marker === 'fails') throw new LoginError('login failed');
+        // ConfigError (not LoginError) so the store-backed recovery path is
+        // never engaged here; that path is covered separately above.
+        if (marker === 'fails') throw new ConfigError('login failed');
         return billResult;
       },
     };
@@ -526,11 +841,8 @@ describe('runJobs', () => {
           solveFromImageBase64: async () => 'captcha',
         }),
         getAdapter: () => adapter,
-        env: {
-          FAILS_MARKER: 'fails',
-          SUCCEEDS_MARKER: 'succeeds',
-          DISABLED_MARKER: 'disabled',
-        },
+        env: { SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX },
+        store,
       },
     );
 

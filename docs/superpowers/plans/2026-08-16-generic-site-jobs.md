@@ -244,8 +244,8 @@ export function billResultToRecord(result: BillResult): Record<string, unknown> 
 
 Notify: resolve topic from `job.notify.channel` (ntfy) or skip webhook until slice 2 (if channel is webhook, **skip send** and log `notify skipped: webhook not implemented` only if you split — **prefer implementing webhook in slice 2 Task 6, not here**). Slice 1: if channel is ntfy with empty topic, fall back to `settings.ntfy.defaultTopic` or env `NTFY_TOPIC`.
 
-- [ ] Update job-runner tests: dummy success writes `result.amount`; no `billSummary`.
-- [ ] `npm run test -w @billing-agent/core`
+- [x] Update job-runner tests: dummy success writes `result.amount`; no `billSummary`.
+- [x] `npm run test -w @billing-agent/core`
 
 ### Task 4: Migrate CLI
 

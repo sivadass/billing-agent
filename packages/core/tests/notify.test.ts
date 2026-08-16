@@ -1,22 +1,53 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import type { ExtractField } from '../src/store/types.ts';
 import { formatSuccessBody, formatFailureBody, sendNtfy } from '../src/notify.ts';
 
+const billSchema: ExtractField[] = [
+  { key: 'amount', label: 'Amount', type: 'price' },
+  { key: 'dueDate', label: 'Due', type: 'date' },
+  { key: 'billPeriod', label: 'Period', type: 'string' },
+  { key: 'status', label: 'Status', type: 'string' },
+  { key: 'accountLabel', label: 'Account', type: 'string' },
+];
+
 describe('notify formatters', () => {
-  it('formats success body fields', () => {
-    const body = formatSuccessBody({
-      provider: 'tnpdcl',
-      amount: '₹1,234.00',
-      dueDate: '2026-08-20',
-      billPeriod: 'Jun-Jul 2026',
-      status: 'unpaid',
-      accountLabel: '****5643',
-    });
-    assert.match(body, /₹1,234\.00/);
-    assert.match(body, /2026-08-20/);
-    assert.match(body, /Jun-Jul 2026/);
-    assert.match(body, /unpaid/);
-    assert.match(body, /\*\*\*\*5643/);
+  it('renders schema-label lines from a generic result, in schema order', () => {
+    const body = formatSuccessBody(
+      {
+        amount: '₹1,234.00',
+        dueDate: '2026-08-20',
+        billPeriod: 'Jun-Jul 2026',
+        status: 'unpaid',
+        accountLabel: '****5643',
+      },
+      billSchema,
+    );
+    assert.equal(
+      body,
+      'Amount: ₹1,234.00\nDue: 2026-08-20\nPeriod: Jun-Jul 2026\nStatus: unpaid\nAccount: ****5643',
+    );
+  });
+
+  it('skips schema fields absent from the result', () => {
+    const body = formatSuccessBody(
+      { amount: '₹0', accountLabel: '****1234' },
+      billSchema,
+    );
+    assert.equal(body, 'Amount: ₹0\nAccount: ****1234');
+  });
+
+  it('never renders result keys that are not part of the schema', () => {
+    const body = formatSuccessBody(
+      { amount: '₹0', accountLabel: '****1234', rawNotes: 'internal note' },
+      billSchema,
+    );
+    assert.doesNotMatch(body, /internal note/);
+  });
+
+  it('renders an empty body for an empty schema', () => {
+    const body = formatSuccessBody({ amount: '₹0' }, []);
+    assert.equal(body, '');
   });
 
   it('formats failure body with code', () => {

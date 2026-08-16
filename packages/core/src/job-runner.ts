@@ -7,7 +7,7 @@ import { getAdapter } from './adapters/registry.js';
 import { withBrowser } from './browser.js';
 import { createMistralCaptchaSolver, type CaptchaSolver } from './captcha.js';
 import {
-  resolveJobCredentials,
+  resolveJobSecrets,
   resolveMistralApiKey,
   type AppConfig,
   type JobConfig,
@@ -153,14 +153,17 @@ function isRecoverableError(error: AppError): boolean {
   );
 }
 
-function runSummary(result: BillResult): RunDocument['result'] {
-  return {
+/** Maps an adapter's `BillResult` onto the generic `RunDocument.result` shape. Never includes `provider` or `notify`. */
+export function billResultToRecord(result: BillResult): Record<string, unknown> {
+  const record: Record<string, unknown> = {
     amount: result.amount,
     accountLabel: result.accountLabel,
-    ...(result.dueDate ? { dueDate: result.dueDate } : {}),
-    ...(result.billPeriod ? { billPeriod: result.billPeriod } : {}),
-    ...(result.status ? { status: result.status } : {}),
   };
+  if (result.dueDate) record.dueDate = result.dueDate;
+  if (result.billPeriod) record.billPeriod = result.billPeriod;
+  if (result.status) record.status = result.status;
+  if (result.rawNotes) record.rawNotes = result.rawNotes;
+  return record;
 }
 
 function jobAdapterId(job: JobConfig): string {
@@ -170,6 +173,28 @@ function jobAdapterId(job: JobConfig): string {
     throw new ConfigError(`Job ${job.id} is missing adapterId`);
   }
   return adapterId;
+}
+
+type NotifyTarget =
+  | { skip: true; reason: string }
+  | { skip: false; baseUrl: string; topic: string };
+
+/**
+ * Resolves where a job's notification should go. Webhook channels are not
+ * implemented until slice 2 (Task 6) — this always skips them rather than
+ * silently dropping the notify request. ntfy channels fall back to the
+ * globally-resolved topic/baseUrl when the job doesn't set its own.
+ */
+function resolveNotifyTarget(job: JobConfig, app: AppConfig): NotifyTarget {
+  const channel = job.notify.channel;
+  if (channel.type === 'webhook') {
+    return { skip: true, reason: 'webhook not implemented' };
+  }
+  return {
+    skip: false,
+    baseUrl: channel.baseUrl || app.ntfy.baseUrl,
+    topic: channel.topic || app.ntfy.topic,
+  };
 }
 
 async function captureScreenshot(
@@ -241,11 +266,9 @@ export async function runJob(
   runnerDeps.onRunCreated?.(runId);
 
   try {
-    const credentials = resolveJobCredentials(
-      job,
-      runnerDeps.env,
-      app.legacySeedCredentials,
-    );
+    const secrets = runnerDeps.store
+      ? await resolveJobSecrets(job, runnerDeps.store, runnerDeps.env)
+      : {};
     const proposePatch =
       deps.proposeOverlayPatch ?? createRecoveryPatchProposer(app, runnerDeps);
 
@@ -265,7 +288,7 @@ export async function runJob(
       const runAdapter = (overlay = activeOverlay) =>
         adapter.run({
           page,
-          credentials,
+          credentials: secrets,
           captchaSolver,
           timeoutMs: app.browser.timeoutMs,
           logger,
@@ -328,14 +351,21 @@ export async function runJob(
       }
     });
 
+    const record = billResultToRecord(result);
+
     if (result.notify !== false) {
-      await runnerDeps.sendNtfy({
-        baseUrl: app.ntfy.baseUrl,
-        topic: app.ntfy.topic,
-        title: job.notify.title,
-        body: formatSuccessBody(result),
-        priority: app.ntfy.priority,
-      });
+      const target = resolveNotifyTarget(job, app);
+      if (target.skip) {
+        logger.info('notify skipped', { reason: target.reason });
+      } else {
+        await runnerDeps.sendNtfy({
+          baseUrl: target.baseUrl,
+          topic: target.topic,
+          title: job.notify.title,
+          body: formatSuccessBody(record, job.schema),
+          priority: app.ntfy.priority,
+        });
+      }
     }
 
     logger.info('job success', {
@@ -354,7 +384,7 @@ export async function runJob(
         recoveryAttempted,
         recoverySucceeded,
         overlayActivated,
-        result: runSummary(result),
+        result: record,
       });
     }
 
@@ -369,13 +399,18 @@ export async function runJob(
     });
 
     try {
-      await runnerDeps.sendNtfy({
-        baseUrl: app.ntfy.baseUrl,
-        topic: app.ntfy.topic,
-        title: `Billing agent failed: ${job.id}`,
-        body: formatFailureBody(job.id, error, screenshotPath),
-        priority: 'high',
-      });
+      const target = resolveNotifyTarget(job, app);
+      if (target.skip) {
+        logger.warn('failure notify skipped', { reason: target.reason });
+      } else {
+        await runnerDeps.sendNtfy({
+          baseUrl: target.baseUrl,
+          topic: target.topic,
+          title: `${job.notify.title} failed`,
+          body: formatFailureBody(job.id, error, screenshotPath),
+          priority: 'high',
+        });
+      }
     } catch (notifyError) {
       logger.error('failure notification failed', {
         error: String(notifyError),

@@ -1,17 +1,21 @@
-import type { BillResult } from './adapters/types.js';
+import type { ExtractField } from './store/types.js';
 import { NotifyError } from './errors.js';
 
 const RETRY_DELAY_MS = 250;
 
-export function formatSuccessBody(result: BillResult): string {
-  const lines: string[] = [
-    `Amount: ${result.amount}`,
-  ];
-  if (result.dueDate) lines.push(`Due: ${result.dueDate}`);
-  if (result.billPeriod) lines.push(`Period: ${result.billPeriod}`);
-  if (result.status) lines.push(`Status: ${result.status}`);
-  lines.push(`Account: ${result.accountLabel}`);
-  if (result.rawNotes) lines.push(result.rawNotes);
+/**
+ * Renders a generic run result as `Label: value` lines, in schema order.
+ * Fields absent from `result` (undefined/null) are skipped. Fields present
+ * in `result` but not described by `schema` are not rendered — only schema
+ * fields are ever shown to the user.
+ */
+export function formatSuccessBody(
+  result: Record<string, unknown>,
+  schema: ExtractField[],
+): string {
+  const lines = schema
+    .filter((field) => result[field.key] !== undefined && result[field.key] !== null)
+    .map((field) => `${field.label}: ${result[field.key]}`);
   return lines.join('\n');
 }
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ConfigError } from './errors.js';
 import type { BillingStore, JobDocument, SettingsDocument } from './store/types.js';
 import { assertJobDocument } from './store/assert-job.js';
+import { decryptSecret, parseMasterKey } from './secrets.js';
 
 export type BrowserConfig = SettingsDocument['browser'];
 export type JobConfig = JobDocument;
@@ -22,7 +23,6 @@ export type AppConfig = {
   browser: BrowserConfig;
   jobs: JobConfig[];
   jobsGeneration: number;
-  legacySeedCredentials: Record<string, Record<string, string>>;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -31,7 +31,6 @@ export type SeedConfig = {
   configPath: string;
   settings: SeedSettings;
   jobs: JobConfig[];
-  legacySeedCredentials: Record<string, Record<string, string>>;
 };
 
 function requireObject(value: unknown, name: string): JsonObject {
@@ -99,30 +98,32 @@ function resolveNtfyTopic(
   throw new ConfigError('Missing ntfy topic: set ntfy.topicEnv, ntfy.defaultTopic, or NTFY_TOPIC');
 }
 
-/** Resolves a job's credentials from the environment. Called lazily by the job runner, not at config load time. */
-export function resolveJobCredentials(
-  job: JobConfig,
-  env: NodeJS.ProcessEnv = process.env,
-  legacySeedCredentials: Record<string, Record<string, string>> = {},
-): Record<string, string> {
-  const runtimeCredentials = (job as JobConfig & {
-    credentialsEnv?: Record<string, string>;
-  }).credentialsEnv;
-  const seedCredentials = legacySeedCredentials[job.id];
-  const credentialEnv = runtimeCredentials ?? seedCredentials;
-  if (!credentialEnv) {
+/**
+ * Resolves a job's secrets from encrypted Mongo documents. Called lazily by
+ * the job runner, not at config load time. Never logs plaintext or
+ * ciphertext; decryption happens in-memory only for the duration of the run.
+ */
+export async function resolveJobSecrets(
+  job: JobDocument,
+  store: BillingStore,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, string>> {
+  if (job.secretIds.length === 0) {
     return {};
   }
 
-  const credentials: Record<string, string> = {};
-  for (const [field, envName] of Object.entries(credentialEnv)) {
-    credentials[field] = resolveEnv(
-      env,
-      envName,
-      `jobs.${job.id}.credentials.${field}Env`,
-    );
+  const key = parseMasterKey(env);
+  const secretDocs = await store.listSecrets({
+    userId: job.userId,
+    jobId: job.id,
+  });
+
+  const secrets: Record<string, string> = {};
+  for (const doc of secretDocs) {
+    if (!job.secretIds.includes(doc.id)) continue;
+    secrets[doc.key] = decryptSecret(doc, key);
   }
-  return credentials;
+  return secrets;
 }
 
 /** Resolves the Mistral API key from the environment. Called lazily, only when a captcha actually needs solving. */
@@ -165,32 +166,11 @@ function parseBrowserConfig(browser: JsonObject): BrowserConfig {
   };
 }
 
-function parseLegacySeedJob(
-  value: unknown,
-  index: number,
-  legacySeedCredentials: Record<string, Record<string, string>>,
-): JobDocument {
+function parseLegacySeedJob(value: unknown, index: number): JobDocument {
   const job = requireObject(value, `jobs[${index}]`);
   const schedule = job.schedule;
   if (schedule !== null && typeof schedule !== 'string') {
     throw new ConfigError(`jobs[${index}].schedule must be a string or null`);
-  }
-
-  const rawCredentials = requireObject(
-    job.credentials,
-    `jobs[${index}].credentials`,
-  );
-  const credentialsEnv: Record<string, string> = {};
-  for (const [key, envName] of Object.entries(rawCredentials)) {
-    if (!key.endsWith('Env') || key.length === 3) {
-      throw new ConfigError(
-        `jobs[${index}].credentials.${key} must be an environment reference`,
-      );
-    }
-    credentialsEnv[key.slice(0, -3)] = requireString(
-      envName,
-      `jobs[${index}].credentials.${key}`,
-    );
   }
 
   const notify = requireObject(job.notify, `jobs[${index}].notify`);
@@ -198,10 +178,6 @@ function parseLegacySeedJob(
   const id = requireString(job.id, `jobs[${index}].id`);
   const provider = requireString(job.provider, `jobs[${index}].provider`);
   const now = new Date().toISOString();
-
-  if (Object.keys(credentialsEnv).length > 0) {
-    legacySeedCredentials[id] = credentialsEnv;
-  }
 
   return assertJobDocument({
     id,
@@ -231,17 +207,13 @@ function parseNewSeedJob(value: unknown, index: number): JobDocument {
   return assertJobDocument(value);
 }
 
-function parseJob(
-  value: unknown,
-  index: number,
-  legacySeedCredentials: Record<string, Record<string, string>>,
-): JobDocument {
+function parseJob(value: unknown, index: number): JobDocument {
   const job = requireObject(value, `jobs[${index}]`);
   if (typeof job.engine === 'string') {
     return parseNewSeedJob(value, index);
   }
   if (typeof job.provider === 'string') {
-    return parseLegacySeedJob(value, index, legacySeedCredentials);
+    return parseLegacySeedJob(value, index);
   }
   throw new ConfigError(`jobs[${index}] must include engine or provider`);
 }
@@ -250,7 +222,6 @@ export function loadSeedConfig(options?: {
   configPath?: string;
 }): SeedConfig {
   const configPath = path.resolve(options?.configPath ?? 'jobs.json');
-  const legacySeedCredentials: Record<string, Record<string, string>> = {};
 
   let contents: string;
   try {
@@ -323,10 +294,7 @@ export function loadSeedConfig(options?: {
             ),
           }),
     },
-    jobs: root.jobs.map((job, index) =>
-      parseJob(job, index, legacySeedCredentials),
-    ),
-    legacySeedCredentials,
+    jobs: root.jobs.map((job, index) => parseJob(job, index)),
   };
 }
 
@@ -335,7 +303,6 @@ function toAppConfig(
   settings: SeedSettings,
   jobs: JobConfig[],
   env: NodeJS.ProcessEnv,
-  legacySeedCredentials: Record<string, Record<string, string>> = {},
 ): AppConfig {
   return {
     configPath,
@@ -348,7 +315,6 @@ function toAppConfig(
     browser: settings.browser,
     jobs,
     jobsGeneration: settings.jobsGeneration ?? 0,
-    legacySeedCredentials,
   };
 }
 
@@ -358,13 +324,7 @@ export function loadConfig(options?: {
 }): AppConfig {
   const parsed = loadSeedConfig({ configPath: options?.configPath });
   const env = options?.env ?? process.env;
-  return toAppConfig(
-    parsed.configPath,
-    parsed.settings,
-    parsed.jobs,
-    env,
-    parsed.legacySeedCredentials,
-  );
+  return toAppConfig(parsed.configPath, parsed.settings, parsed.jobs, env);
 }
 
 export async function loadConfigFromStore(
@@ -380,5 +340,5 @@ export async function loadConfigFromStore(
     jobsGeneration: settingsDoc.jobsGeneration,
     watchesGeneration: settingsDoc.watchesGeneration ?? 0,
   };
-  return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env, {});
+  return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env);
 }

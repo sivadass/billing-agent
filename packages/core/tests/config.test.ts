@@ -5,10 +5,12 @@ import { fileURLToPath } from 'node:url';
 import {
   loadConfig,
   loadSeedConfig,
-  resolveJobCredentials,
+  resolveJobSecrets,
   resolveMistralApiKey,
 } from '../src/config.ts';
 import { ConfigError } from '../src/errors.ts';
+import { encryptSecret } from '../src/secrets.ts';
+import type { BillingStore, JobDocument, SecretDocument } from '../src/store/types.ts';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(dir, 'fixtures', 'jobs.valid.json');
@@ -47,44 +49,142 @@ describe('loadConfig', () => {
   });
 });
 
-describe('resolveJobCredentials', () => {
-  it('resolves credential env vars lazily', () => {
-    const cfg = loadConfig({
-      configPath: fixture,
-      env: { NTFY_TOPIC: 'bills' },
-    });
-    const job = cfg.jobs.find((j) => j.id === 'home-eb');
-    assert.ok(job);
+const TEST_MASTER_KEY_HEX =
+  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const TEST_MASTER_KEY = Buffer.from(TEST_MASTER_KEY_HEX, 'hex');
 
-    const credentials = resolveJobCredentials(job, {
-      TNPDCL_USERNAME: 'user1',
-      TNPDCL_PASSWORD: 'pass1',
-    }, cfg.legacySeedCredentials);
-    assert.deepEqual(credentials, { username: 'user1', password: 'pass1' });
+function makeSecretDoc(overrides: Partial<SecretDocument> = {}): SecretDocument {
+  return {
+    id: 'secret-1',
+    userId: 'user-1',
+    jobId: 'home-eb',
+    conversationId: null,
+    key: 'username',
+    ciphertext: '',
+    iv: '',
+    tag: '',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function storeWithSecrets(secrets: SecretDocument[]): BillingStore {
+  return {
+    listSecrets: async (options) =>
+      secrets.filter(
+        (secret) =>
+          secret.userId === options.userId &&
+          (options.jobId === undefined || secret.jobId === options.jobId),
+      ),
+  } as unknown as BillingStore;
+}
+
+describe('resolveJobSecrets', () => {
+  it('decrypts stored secret documents, keyed by secret.key', async () => {
+    const job: JobDocument = {
+      ...(loadConfig({
+        configPath: fixture,
+        env: { NTFY_TOPIC: 'bills' },
+      }).jobs.find((j) => j.id === 'home-eb') as JobDocument),
+      secretIds: ['secret-1', 'secret-2'],
+    };
+    const usernameSecret = makeSecretDoc({
+      id: 'secret-1',
+      key: 'username',
+      ...encryptSecret('user1', TEST_MASTER_KEY),
+    });
+    const passwordSecret = makeSecretDoc({
+      id: 'secret-2',
+      key: 'password',
+      ...encryptSecret('pass1', TEST_MASTER_KEY),
+    });
+    const store = storeWithSecrets([usernameSecret, passwordSecret]);
+
+    const secrets = await resolveJobSecrets(job, store, {
+      SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX,
+    });
+
+    assert.deepEqual(secrets, { username: 'user1', password: 'pass1' });
   });
 
-  it('throws when a credential env var is missing', () => {
-    const cfg = loadConfig({
-      configPath: fixture,
-      env: { NTFY_TOPIC: 'bills' },
-    });
-    const job = cfg.jobs.find((j) => j.id === 'home-eb');
-    assert.ok(job);
+  it('never leaks ciphertext or plaintext into the returned keys/values beyond the intended mapping', async () => {
+    const job: JobDocument = {
+      ...(loadConfig({
+        configPath: fixture,
+        env: { NTFY_TOPIC: 'bills' },
+      }).jobs.find((j) => j.id === 'home-eb') as JobDocument),
+      secretIds: ['secret-1'],
+    };
+    const encrypted = encryptSecret('super-secret-password', TEST_MASTER_KEY);
+    const store = storeWithSecrets([
+      makeSecretDoc({ id: 'secret-1', key: 'password', ...encrypted }),
+    ]);
 
-    assert.throws(
-      () => resolveJobCredentials(job, {}, cfg.legacySeedCredentials),
-      (err: unknown) => err instanceof ConfigError,
-    );
+    const secrets = await resolveJobSecrets(job, store, {
+      SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX,
+    });
+
+    assert.deepEqual(Object.keys(secrets), ['password']);
+    assert.equal(secrets.password, 'super-secret-password');
+    assert.notEqual(secrets.password, encrypted.ciphertext);
   });
 
-  it('resolves to an empty object for jobs with no credentials', () => {
+  it('only resolves secrets referenced by job.secretIds, ignoring other secrets for the same job', async () => {
+    const job: JobDocument = {
+      ...(loadConfig({
+        configPath: fixture,
+        env: { NTFY_TOPIC: 'bills' },
+      }).jobs.find((j) => j.id === 'home-eb') as JobDocument),
+      secretIds: ['secret-1'],
+    };
+    const included = makeSecretDoc({
+      id: 'secret-1',
+      key: 'username',
+      ...encryptSecret('user1', TEST_MASTER_KEY),
+    });
+    const excluded = makeSecretDoc({
+      id: 'secret-unrelated',
+      key: 'other',
+      ...encryptSecret('should-not-appear', TEST_MASTER_KEY),
+    });
+    const store = storeWithSecrets([included, excluded]);
+
+    const secrets = await resolveJobSecrets(job, store, {
+      SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX,
+    });
+
+    assert.deepEqual(secrets, { username: 'user1' });
+  });
+
+  it('resolves to an empty object for jobs with no secretIds, without requiring a master key', async () => {
     const cfg = loadConfig({
       configPath: fixture,
       env: { NTFY_TOPIC: 'bills' },
     });
     const job = cfg.jobs.find((j) => j.id === 'smoke-test');
     assert.ok(job);
-    assert.deepEqual(resolveJobCredentials(job, {}), {});
+    assert.deepEqual(job.secretIds, []);
+
+    const store = storeWithSecrets([]);
+    const secrets = await resolveJobSecrets(job, store, {});
+    assert.deepEqual(secrets, {});
+  });
+
+  it('throws ConfigError when secrets are referenced but the master key is missing', async () => {
+    const job: JobDocument = {
+      ...(loadConfig({
+        configPath: fixture,
+        env: { NTFY_TOPIC: 'bills' },
+      }).jobs.find((j) => j.id === 'home-eb') as JobDocument),
+      secretIds: ['secret-1'],
+    };
+    const store = storeWithSecrets([makeSecretDoc({ id: 'secret-1' })]);
+
+    await assert.rejects(
+      resolveJobSecrets(job, store, {}),
+      (err: unknown) => err instanceof ConfigError,
+    );
   });
 });
 
@@ -122,16 +222,12 @@ describe('loadSeedConfig', () => {
     assert.equal(cfg.ntfy.topic, 'fallback-topic');
   });
 
-  it('does not leak legacy seed credentials across loadSeedConfig calls', () => {
-    const first = loadSeedConfig({ configPath: fixture });
-    const second = loadSeedConfig({
-      configPath: path.join(dir, 'fixtures', 'jobs.smoke-only.json'),
-    });
-
-    assert.deepEqual(first.legacySeedCredentials['home-eb'], {
-      username: 'TNPDCL_USERNAME',
-      password: 'TNPDCL_PASSWORD',
-    });
-    assert.deepEqual(second.legacySeedCredentials, {});
+  it('parses a legacy provider job into an adapter JobDocument, ignoring the unused credentials block', () => {
+    const cfg = loadSeedConfig({ configPath: fixture });
+    const job = cfg.jobs.find((j) => j.id === 'home-eb');
+    assert.ok(job);
+    assert.equal(job.engine, 'adapter');
+    assert.equal(job.adapterId, 'tnpdcl');
+    assert.deepEqual(job.secretIds, []);
   });
 });
