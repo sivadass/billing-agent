@@ -47,6 +47,7 @@ const app: AppConfig = {
     saveErrorScreenshot: false,
   },
   jobs: [job],
+  legacySeedCredentials: {},
 };
 
 const testEnv = { FAKE_JOB_USERNAME: 'test-user' };

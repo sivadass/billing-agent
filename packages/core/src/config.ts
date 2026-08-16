@@ -22,6 +22,7 @@ export type AppConfig = {
   browser: BrowserConfig;
   jobs: JobConfig[];
   jobsGeneration: number;
+  legacySeedCredentials: Record<string, Record<string, string>>;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -30,9 +31,8 @@ export type SeedConfig = {
   configPath: string;
   settings: SeedSettings;
   jobs: JobConfig[];
+  legacySeedCredentials: Record<string, Record<string, string>>;
 };
-
-const seedCredentialEnvByJobId = new Map<string, Record<string, string>>();
 
 function requireObject(value: unknown, name: string): JsonObject {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -103,11 +103,12 @@ function resolveNtfyTopic(
 export function resolveJobCredentials(
   job: JobConfig,
   env: NodeJS.ProcessEnv = process.env,
+  legacySeedCredentials: Record<string, Record<string, string>> = {},
 ): Record<string, string> {
-  const seedCredentials = seedCredentialEnvByJobId.get(job.id);
   const runtimeCredentials = (job as JobConfig & {
     credentialsEnv?: Record<string, string>;
   }).credentialsEnv;
+  const seedCredentials = legacySeedCredentials[job.id];
   const credentialEnv = runtimeCredentials ?? seedCredentials;
   if (!credentialEnv) {
     return {};
@@ -164,7 +165,11 @@ function parseBrowserConfig(browser: JsonObject): BrowserConfig {
   };
 }
 
-function parseLegacySeedJob(value: unknown, index: number): JobDocument {
+function parseLegacySeedJob(
+  value: unknown,
+  index: number,
+  legacySeedCredentials: Record<string, Record<string, string>>,
+): JobDocument {
   const job = requireObject(value, `jobs[${index}]`);
   const schedule = job.schedule;
   if (schedule !== null && typeof schedule !== 'string') {
@@ -195,7 +200,7 @@ function parseLegacySeedJob(value: unknown, index: number): JobDocument {
   const now = new Date().toISOString();
 
   if (Object.keys(credentialsEnv).length > 0) {
-    seedCredentialEnvByJobId.set(id, credentialsEnv);
+    legacySeedCredentials[id] = credentialsEnv;
   }
 
   return assertJobDocument({
@@ -226,13 +231,17 @@ function parseNewSeedJob(value: unknown, index: number): JobDocument {
   return assertJobDocument(value);
 }
 
-function parseJob(value: unknown, index: number): JobDocument {
+function parseJob(
+  value: unknown,
+  index: number,
+  legacySeedCredentials: Record<string, Record<string, string>>,
+): JobDocument {
   const job = requireObject(value, `jobs[${index}]`);
   if (typeof job.engine === 'string') {
     return parseNewSeedJob(value, index);
   }
   if (typeof job.provider === 'string') {
-    return parseLegacySeedJob(value, index);
+    return parseLegacySeedJob(value, index, legacySeedCredentials);
   }
   throw new ConfigError(`jobs[${index}] must include engine or provider`);
 }
@@ -240,8 +249,8 @@ function parseJob(value: unknown, index: number): JobDocument {
 export function loadSeedConfig(options?: {
   configPath?: string;
 }): SeedConfig {
-  seedCredentialEnvByJobId.clear();
   const configPath = path.resolve(options?.configPath ?? 'jobs.json');
+  const legacySeedCredentials: Record<string, Record<string, string>> = {};
 
   let contents: string;
   try {
@@ -314,7 +323,10 @@ export function loadSeedConfig(options?: {
             ),
           }),
     },
-    jobs: root.jobs.map((job, index) => parseJob(job, index)),
+    jobs: root.jobs.map((job, index) =>
+      parseJob(job, index, legacySeedCredentials),
+    ),
+    legacySeedCredentials,
   };
 }
 
@@ -323,6 +335,7 @@ function toAppConfig(
   settings: SeedSettings,
   jobs: JobConfig[],
   env: NodeJS.ProcessEnv,
+  legacySeedCredentials: Record<string, Record<string, string>> = {},
 ): AppConfig {
   return {
     configPath,
@@ -335,6 +348,7 @@ function toAppConfig(
     browser: settings.browser,
     jobs,
     jobsGeneration: settings.jobsGeneration ?? 0,
+    legacySeedCredentials,
   };
 }
 
@@ -344,7 +358,13 @@ export function loadConfig(options?: {
 }): AppConfig {
   const parsed = loadSeedConfig({ configPath: options?.configPath });
   const env = options?.env ?? process.env;
-  return toAppConfig(parsed.configPath, parsed.settings, parsed.jobs, env);
+  return toAppConfig(
+    parsed.configPath,
+    parsed.settings,
+    parsed.jobs,
+    env,
+    parsed.legacySeedCredentials,
+  );
 }
 
 export async function loadConfigFromStore(
@@ -360,5 +380,5 @@ export async function loadConfigFromStore(
     jobsGeneration: settingsDoc.jobsGeneration,
     watchesGeneration: settingsDoc.watchesGeneration ?? 0,
   };
-  return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env);
+  return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env, {});
 }

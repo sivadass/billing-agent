@@ -51,47 +51,119 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function defaultJobDocument(userId: string): JobDocument {
+  const now = new Date().toISOString();
+  return {
+    id: '',
+    userId,
+    name: '',
+    enabled: true,
+    schedule: null,
+    startUrl: '',
+    engine: 'adapter',
+    goal: '',
+    schema: [],
+    workflow: [],
+    secretIds: [],
+    notify: {
+      title: '',
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
+    },
+    lastResult: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function coerceNotify(
+  payload: Record<string, unknown>,
+  fallback: JobDocument['notify'],
+): JobDocument['notify'] {
+  if (!isObject(payload.notify)) {
+    return fallback;
+  }
+  const notify = payload.notify;
+  const title = typeof notify.title === 'string' ? notify.title : fallback.title;
+  const on =
+    notify.on === 'always' ||
+    notify.on === 'change' ||
+    notify.on === 'drop' ||
+    notify.on === 'failure_only'
+      ? notify.on
+      : fallback.on;
+  let channel = fallback.channel;
+  if (isObject(notify.channel)) {
+    const rawChannel = notify.channel;
+    if (rawChannel.type === 'ntfy' && typeof rawChannel.topic === 'string') {
+      channel = {
+        type: 'ntfy',
+        topic: rawChannel.topic,
+        ...(typeof rawChannel.baseUrl === 'string'
+          ? { baseUrl: rawChannel.baseUrl }
+          : {}),
+      };
+    } else if (rawChannel.type === 'webhook' && typeof rawChannel.url === 'string') {
+      channel = { type: 'webhook', url: rawChannel.url };
+    }
+  }
+  return { title, on, channel };
+}
+
 function coerceJobDocument(
   payload: unknown,
   userId: string,
   fallback?: JobDocument,
 ): JobDocument {
   if (!isObject(payload)) throw new Error('job payload must be an object');
-  const base = fallback ?? {
-    id: '',
-    userId,
-    provider: '',
-    enabled: true,
-    schedule: null,
-    credentialsEnv: {},
-    notify: { title: '' },
-  };
+  const base = fallback ?? defaultJobDocument(userId);
+  const now = new Date().toISOString();
+
+  const adapterId =
+    typeof payload.adapterId === 'string'
+      ? payload.adapterId
+      : typeof payload.provider === 'string'
+        ? payload.provider
+        : base.adapterId;
+
+  const engine =
+    payload.engine === 'workflow' || payload.engine === 'adapter'
+      ? payload.engine
+      : base.engine;
+
+  const notify = coerceNotify(payload, base.notify);
+  const name =
+    typeof payload.name === 'string'
+      ? payload.name
+      : notify.title || base.name;
 
   const job: JobDocument = {
     id: typeof payload.id === 'string' ? payload.id : base.id,
     userId,
-    provider: typeof payload.provider === 'string' ? payload.provider : base.provider,
+    name,
     enabled: typeof payload.enabled === 'boolean' ? payload.enabled : base.enabled,
     schedule:
       payload.schedule === null || typeof payload.schedule === 'string'
         ? payload.schedule
         : base.schedule,
-    credentialsEnv: isObject(payload.credentialsEnv)
-      ? Object.fromEntries(
-          Object.entries(payload.credentialsEnv).map(([key, value]) => [
-            key,
-            String(value),
-          ]),
-        )
-      : base.credentialsEnv,
-    notify:
-      isObject(payload.notify) && typeof payload.notify.title === 'string'
-        ? { title: payload.notify.title }
-        : base.notify,
+    startUrl: typeof payload.startUrl === 'string' ? payload.startUrl : base.startUrl,
+    engine,
+    ...(adapterId ? { adapterId } : {}),
+    goal: typeof payload.goal === 'string' ? payload.goal : base.goal,
+    schema: base.schema,
+    workflow: base.workflow,
+    secretIds: base.secretIds,
+    notify,
+    lastResult: base.lastResult,
+    createdAt:
+      typeof payload.createdAt === 'string' ? payload.createdAt : base.createdAt,
+    updatedAt: now,
   };
 
   if (!job.id) throw new Error('job.id is required');
-  if (!job.provider) throw new Error('job.provider is required');
+  if (job.engine === 'adapter' && !job.adapterId) {
+    throw new Error('job.adapterId or provider is required');
+  }
   if (!job.notify.title) throw new Error('job.notify.title is required');
   return job;
 }

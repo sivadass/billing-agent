@@ -241,7 +241,11 @@ export async function runJob(
   runnerDeps.onRunCreated?.(runId);
 
   try {
-    const credentials = resolveJobCredentials(job, runnerDeps.env);
+    const credentials = resolveJobCredentials(
+      job,
+      runnerDeps.env,
+      app.legacySeedCredentials,
+    );
     const proposePatch =
       deps.proposeOverlayPatch ?? createRecoveryPatchProposer(app, runnerDeps);
 

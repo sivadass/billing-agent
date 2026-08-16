@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   loadConfig,
+  loadSeedConfig,
   resolveJobCredentials,
   resolveMistralApiKey,
 } from '../src/config.ts';
@@ -58,7 +59,7 @@ describe('resolveJobCredentials', () => {
     const credentials = resolveJobCredentials(job, {
       TNPDCL_USERNAME: 'user1',
       TNPDCL_PASSWORD: 'pass1',
-    });
+    }, cfg.legacySeedCredentials);
     assert.deepEqual(credentials, { username: 'user1', password: 'pass1' });
   });
 
@@ -71,7 +72,7 @@ describe('resolveJobCredentials', () => {
     assert.ok(job);
 
     assert.throws(
-      () => resolveJobCredentials(job, {}),
+      () => resolveJobCredentials(job, {}, cfg.legacySeedCredentials),
       (err: unknown) => err instanceof ConfigError,
     );
   });
@@ -108,5 +109,29 @@ describe('resolveMistralApiKey', () => {
       () => resolveMistralApiKey(cfg.mistral, {}),
       (err: unknown) => err instanceof ConfigError,
     );
+  });
+});
+
+describe('loadSeedConfig', () => {
+  it('resolves ntfy topic from NTFY_TOPIC when topicEnv is absent', () => {
+    const minimalFixture = path.join(dir, 'fixtures', 'jobs.ntfy-fallback.json');
+    const cfg = loadConfig({
+      configPath: minimalFixture,
+      env: { NTFY_TOPIC: 'fallback-topic' },
+    });
+    assert.equal(cfg.ntfy.topic, 'fallback-topic');
+  });
+
+  it('does not leak legacy seed credentials across loadSeedConfig calls', () => {
+    const first = loadSeedConfig({ configPath: fixture });
+    const second = loadSeedConfig({
+      configPath: path.join(dir, 'fixtures', 'jobs.smoke-only.json'),
+    });
+
+    assert.deepEqual(first.legacySeedCredentials['home-eb'], {
+      username: 'TNPDCL_USERNAME',
+      password: 'TNPDCL_PASSWORD',
+    });
+    assert.deepEqual(second.legacySeedCredentials, {});
   });
 });

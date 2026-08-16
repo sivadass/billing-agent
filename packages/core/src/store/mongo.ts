@@ -66,14 +66,36 @@ function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
   if (typeof raw.engine === 'string') {
     return assertJobDocument(raw);
   }
+
+  const id = raw.id;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new ConfigError('job.id must be a non-empty string');
+  }
+
+  const notifyRaw = raw.notify;
+  if (
+    typeof notifyRaw !== 'object' ||
+    notifyRaw === null ||
+    Array.isArray(notifyRaw)
+  ) {
+    throw new ConfigError('job.notify must be an object');
+  }
+  const notifyTitle = (notifyRaw as { title?: unknown }).title;
+  if (typeof notifyTitle !== 'string' || notifyTitle.length === 0) {
+    throw new ConfigError('job.notify.title must be a non-empty string');
+  }
+
+  const provider = raw.provider;
+  if (typeof provider !== 'string' || provider.length === 0) {
+    throw new ConfigError('job.provider must be a non-empty string');
+  }
+
   return assertJobDocument({
     ...raw,
-    name:
-      raw.notify && typeof raw.notify === 'object'
-        ? (raw.notify as { title?: string }).title ?? raw.id
-        : raw.id,
+    id,
+    name: notifyTitle,
     engine: 'adapter',
-    adapterId: raw.provider,
+    adapterId: provider,
     startUrl: '',
     goal: '',
     schema: [],
@@ -83,7 +105,7 @@ function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     notify: {
-      title: (raw.notify as { title: string }).title,
+      title: notifyTitle,
       on: 'always',
       channel: { type: 'ntfy', topic: '' },
     },

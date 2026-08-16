@@ -23,6 +23,14 @@ function requireString(value: unknown, name: string): string {
   return value;
 }
 
+function requireNonemptyString(value: unknown, name: string): string {
+  const valueStr = requireString(value, name);
+  if (valueStr.length === 0) {
+    throw new ConfigError(`${name} must be a non-empty string`);
+  }
+  return valueStr;
+}
+
 function requireBoolean(value: unknown, name: string): boolean {
   if (typeof value !== 'boolean') {
     throw new ConfigError(`${name} must be a boolean`);
@@ -76,7 +84,7 @@ function assertNotifyChannel(value: unknown, name: string): NotifyChannel {
   if (type === 'webhook') {
     return {
       type: 'webhook',
-      url: requireString(channel.url, `${name}.url`),
+      url: requireNonemptyString(channel.url, `${name}.url`),
     };
   }
   throw new ConfigError(`${name}.type must be 'ntfy' or 'webhook'`);
@@ -85,25 +93,25 @@ function assertNotifyChannel(value: unknown, name: string): NotifyChannel {
 function assertExtractField(value: unknown, name: string): ExtractField {
   const field = requireObject(value, name);
   return {
-    key: requireString(field.key, `${name}.key`),
-    label: requireString(field.label, `${name}.label`),
+    key: requireNonemptyString(field.key, `${name}.key`),
+    label: requireNonemptyString(field.label, `${name}.label`),
     type: requireFieldType(field.type, `${name}.type`),
   };
 }
 
 function assertWorkflowStep(value: unknown, name: string): WorkflowStep {
   const step = requireObject(value, name);
-  const id = requireString(step.id, `${name}.id`);
-  const type = requireString(step.type, `${name}.type`);
+  const id = requireNonemptyString(step.id, `${name}.id`);
+  const type = requireNonemptyString(step.type, `${name}.type`);
 
   switch (type) {
     case 'goto':
       return {
         id,
         type: 'goto',
-        url: requireString(step.url, `${name}.url`),
+        url: requireNonemptyString(step.url, `${name}.url`),
       };
-    case 'fill':
+    case 'fill': {
       const source = step.source;
       if (source !== 'secret' && source !== 'literal') {
         throw new ConfigError(`${name}.source must be 'secret' or 'literal'`);
@@ -111,7 +119,7 @@ function assertWorkflowStep(value: unknown, name: string): WorkflowStep {
       return {
         id,
         type: 'fill',
-        selector: requireString(step.selector, `${name}.selector`),
+        selector: requireNonemptyString(step.selector, `${name}.selector`),
         source,
         ...(step.secretKey === undefined
           ? {}
@@ -120,11 +128,12 @@ function assertWorkflowStep(value: unknown, name: string): WorkflowStep {
           ? {}
           : { value: requireString(step.value, `${name}.value`) }),
       };
+    }
     case 'click':
       return {
         id,
         type: 'click',
-        selector: requireString(step.selector, `${name}.selector`),
+        selector: requireNonemptyString(step.selector, `${name}.selector`),
       };
     case 'wait':
       return {
@@ -164,7 +173,7 @@ function assertWorkflowStep(value: unknown, name: string): WorkflowStep {
       return {
         id,
         type: 'assert',
-        selector: requireString(step.selector, `${name}.selector`),
+        selector: requireNonemptyString(step.selector, `${name}.selector`),
         exists: true,
       };
     default:
@@ -177,7 +186,7 @@ function assertExtractFieldField(
   name: string,
 ): { key: string; selector?: string; strategy?: 'text' | 'price' | 'json_ld' | 'shopify_json' } {
   const field = requireObject(value, name);
-  const key = requireString(field.key, `${name}.key`);
+  const key = requireNonemptyString(field.key, `${name}.key`);
   const strategy = field.strategy;
   if (
     strategy !== undefined &&
@@ -231,7 +240,7 @@ export function assertJobDocument(raw: unknown): JobDocument {
   const adapterId =
     job.adapterId === undefined
       ? undefined
-      : requireString(job.adapterId, 'job.adapterId');
+      : requireNonemptyString(job.adapterId, 'job.adapterId');
 
   if (!Array.isArray(job.schema)) {
     throw new ConfigError('job.schema must be an array');
@@ -246,9 +255,9 @@ export function assertJobDocument(raw: unknown): JobDocument {
   const notify = requireObject(job.notify, 'job.notify');
 
   return {
-    id: requireString(job.id, 'job.id'),
+    id: requireNonemptyString(job.id, 'job.id'),
     userId: requireString(job.userId, 'job.userId'),
-    name: requireString(job.name, 'job.name'),
+    name: requireNonemptyString(job.name, 'job.name'),
     enabled: requireBoolean(job.enabled, 'job.enabled'),
     schedule,
     startUrl: requireString(job.startUrl, 'job.startUrl'),
@@ -262,15 +271,15 @@ export function assertJobDocument(raw: unknown): JobDocument {
       assertWorkflowStep(step, `job.workflow[${index}]`),
     ),
     secretIds: job.secretIds.map((secretId, index) =>
-      requireString(secretId, `job.secretIds[${index}]`),
+      requireNonemptyString(secretId, `job.secretIds[${index}]`),
     ),
     notify: {
-      title: requireString(notify.title, 'job.notify.title'),
+      title: requireNonemptyString(notify.title, 'job.notify.title'),
       on: requireNotifyOn(notify.on, 'job.notify.on'),
       channel: assertNotifyChannel(notify.channel, 'job.notify.channel'),
     },
     lastResult: assertLastResult(job.lastResult, 'job.lastResult'),
-    createdAt: requireString(job.createdAt, 'job.createdAt'),
-    updatedAt: requireString(job.updatedAt, 'job.updatedAt'),
+    createdAt: requireNonemptyString(job.createdAt, 'job.createdAt'),
+    updatedAt: requireNonemptyString(job.updatedAt, 'job.updatedAt'),
   };
 }

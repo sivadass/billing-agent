@@ -7,6 +7,7 @@ import type {
   JobDocument,
   PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
   WatchDocument,
@@ -29,6 +30,7 @@ class MemoryStore implements BillingStore {
   watches = new Map<string, WatchDocument>();
   priceChecks = new Map<string, PriceCheckDocument>();
   runs = new Map<string, RunDocument>();
+  secrets = new Map<string, SecretDocument>();
   users = new Map<string, UserDocument>();
 
   async getSettings(): Promise<SettingsDocument> {
@@ -53,6 +55,37 @@ class MemoryStore implements BillingStore {
 
   async upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void> {
     this.settings = { id: 'default', ...settings };
+  }
+
+  async upsertSecret(secret: SecretDocument): Promise<void> {
+    this.secrets.set(secret.id, secret);
+  }
+
+  async listSecrets(options: {
+    userId: string;
+    jobId?: string;
+    conversationId?: string;
+  }): Promise<SecretDocument[]> {
+    let secrets = [...this.secrets.values()].filter(
+      (secret) => secret.userId === options.userId,
+    );
+    if (options.jobId !== undefined) {
+      secrets = secrets.filter((secret) => secret.jobId === options.jobId);
+    }
+    if (options.conversationId !== undefined) {
+      secrets = secrets.filter(
+        (secret) => secret.conversationId === options.conversationId,
+      );
+    }
+    return secrets.sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  async deleteSecretsForJob(jobId: string): Promise<void> {
+    for (const [id, secret] of this.secrets.entries()) {
+      if (secret.jobId === jobId) {
+        this.secrets.delete(id);
+      }
+    }
   }
 
   async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {

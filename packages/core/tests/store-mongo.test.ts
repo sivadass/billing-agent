@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ConfigError } from '../src/errors.ts';
 import { createBillingStoreFromCollections } from '../src/store/mongo.ts';
 import type {
   JobDocument,
@@ -375,6 +376,94 @@ describe('mongo store', () => {
 
     const missing = await store.findUserByEmail('missing@example.com');
     assert.equal(missing, null);
+  });
+
+  it('throws ConfigError when legacy job notify is missing', async () => {
+    const legacyJobs = new MemoryCollection<Record<string, unknown>>();
+    const legacyStore = createBillingStoreFromCollections(
+      {
+        jobs: legacyJobs,
+        settings: new MemoryCollection<SettingsDocument>(),
+        overlays: new MemoryCollection<OverlayDocument>(),
+        runs: new MemoryCollection<Record<string, unknown>>(),
+        secrets: new MemoryCollection<SecretDocument>(),
+        watches: new MemoryCollection<WatchDocument>(),
+        priceChecks: new MemoryCollection<PriceCheckDocument>(),
+        users: new MemoryCollection<UserDocument>(),
+      },
+      async () => {},
+    );
+
+    await legacyJobs.insertOne({
+      id: 'legacy-bad',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: null,
+    });
+
+    await assert.rejects(
+      () => legacyStore.getJob('legacy-bad'),
+      (error: unknown) =>
+        error instanceof ConfigError &&
+        error.message === 'job.notify must be an object',
+    );
+  });
+
+  it('upserts, lists, filters, and deletes secrets', async () => {
+    const { store } = createStore();
+    const secret = {
+      id: 'secret-1',
+      userId: 'user-1',
+      jobId: 'home-eb',
+      conversationId: null,
+      key: 'password',
+      ciphertext: 'abc',
+      iv: 'iv',
+      tag: 'tag',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+
+    await store.upsertSecret(secret);
+    const byJob = await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' });
+    assert.deepEqual(byJob, [secret]);
+
+    const otherUser = await store.listSecrets({ userId: 'user-2', jobId: 'home-eb' });
+    assert.deepEqual(otherUser, []);
+
+    await store.deleteSecretsForJob('home-eb');
+    const afterDelete = await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' });
+    assert.deepEqual(afterDelete, []);
+  });
+
+  it('replaces secrets on upsert with the same id', async () => {
+    const { store } = createStore();
+    const base = {
+      id: 'secret-1',
+      userId: 'user-1',
+      jobId: 'home-eb',
+      conversationId: null,
+      key: 'password',
+      ciphertext: 'old',
+      iv: 'iv-old',
+      tag: 'tag-old',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+    const updated = {
+      ...base,
+      ciphertext: 'new',
+      iv: 'iv-new',
+      tag: 'tag-new',
+      updatedAt: '2026-08-16T01:00:00.000Z',
+    };
+
+    await store.upsertSecret(base);
+    await store.upsertSecret(updated);
+
+    const listed = await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' });
+    assert.deepEqual(listed, [updated]);
   });
 
   it('coerces legacy jobs on read', async () => {
