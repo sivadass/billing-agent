@@ -17,6 +17,7 @@ import {
 import { runWatch, runWatches } from '@billing-agent/price-monitor';
 import { parseCorsOrigins, startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
+import { executeRunJobsCommand } from './run-jobs-command.js';
 
 registerBuiltInAdapters();
 
@@ -90,15 +91,13 @@ program
         return;
       }
 
-      const store = await connectStore(requireMongoUri());
-      try {
-        const app = await loadConfigFromStore(store);
-        const jobIds = options.all ? 'all' : [options.job as string];
-        const { failed } = await runJobs(app, jobIds);
-        process.exitCode = failed > 0 ? 1 : 0;
-      } finally {
-        await store.close();
-      }
+      const jobIds = options.all ? 'all' : [options.job as string];
+      const { failed } = await executeRunJobsCommand(
+        requireMongoUri(),
+        jobIds,
+        { connectStore, loadConfigFromStore, runJobs },
+      );
+      process.exitCode = failed > 0 ? 1 : 0;
     }),
   );
 
