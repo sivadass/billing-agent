@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ConfigError } from './errors.js';
 import { encryptSecret, parseMasterKey } from './secrets.js';
+import { assertJobDocument } from './store/assert-job.js';
 import type {
   BillingStore,
   ExtractField,
@@ -64,6 +65,26 @@ const WATCH_SCHEMA: ExtractField[] = [
 function isUnmigratedJob(raw: unknown): raw is LegacyBillingJobDoc {
   const job = raw as Record<string, unknown>;
   return typeof job.engine !== 'string';
+}
+
+/**
+ * Preflight for a job the migration is about to skip because it already carries
+ * `engine`. Such a document can predate the write-time validation, so checking
+ * it here surfaces the problem during the documented migration step instead of
+ * the next time `GET /jobs` tries to list it. Nothing is rewritten: the operator
+ * fixes the document and re-runs.
+ */
+function assertMigratedJobIsValid(raw: Record<string, unknown>): void {
+  try {
+    assertJobDocument(raw);
+  } catch (error) {
+    throw new ConfigError(
+      `Job "${String(raw.id)}" is already migrated but invalid: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
 }
 
 /**
@@ -321,7 +342,10 @@ export async function migrateGenericJobs(input: {
 
   let jobsMigrated = 0;
   for (const job of await fetchRawJobDocuments(store)) {
-    if (!isUnmigratedJob(job)) continue;
+    if (!isUnmigratedJob(job)) {
+      assertMigratedJobIsValid(job);
+      continue;
+    }
     await migrateBillingJob(job, ctx);
     jobsMigrated += 1;
   }

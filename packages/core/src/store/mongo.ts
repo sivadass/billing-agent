@@ -197,8 +197,20 @@ export function createBillingStoreFromCollections(
       return jobs.map((job) => ({ ...job }));
     },
 
+    /**
+     * Validated before writing: `listJobs` / `getJob` validate on read, so an
+     * internal caller persisting a document that fails validation would make the
+     * whole job list unreadable. Legacy documents already in Mongo are
+     * untouched — they only ever arrive through the read-time
+     * `coerceLegacyJob` path, never through here.
+     */
     async upsertJob(job) {
-      await collections.jobs.updateOne({ id: job.id }, { $set: job }, { upsert: true });
+      const validated = assertJobDocument(job);
+      await collections.jobs.updateOne(
+        { id: validated.id },
+        { $set: validated },
+        { upsert: true },
+      );
     },
 
     async upsertSettings(settings) {

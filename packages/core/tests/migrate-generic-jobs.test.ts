@@ -272,6 +272,38 @@ function legacyPriceCheck(): PriceCheckDocument {
   };
 }
 
+/** A workflow job in the shape this migration (or the API) already persisted. */
+function migratedWorkflowJob(): JobDocument {
+  return {
+    id: 'sivadass-in-email',
+    userId: 'user-1',
+    name: 'Contact email',
+    enabled: true,
+    schedule: null,
+    startUrl: 'https://sivadass.in/',
+    engine: 'workflow',
+    goal: 'Grab the contact email address',
+    schema: [{ key: 'email', label: 'Email', type: 'string' }],
+    workflow: [
+      { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+      {
+        id: 'extract-email',
+        type: 'extract',
+        fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+      },
+    ],
+    secretIds: [],
+    notify: {
+      title: 'Contact email',
+      on: 'always',
+      channel: { type: 'ntfy', topic: 'existing-topic' },
+    },
+    lastResult: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
 function baseEnv(): NodeJS.ProcessEnv {
   return {
     SECRETS_MASTER_KEY: TEST_MASTER_KEY_HEX,
@@ -529,6 +561,54 @@ describe('migrateGenericJobs', () => {
     assert.deepEqual(job, alreadyMigrated);
   });
 
+  it('skips an already-migrated workflow job without rewriting it', async () => {
+    const store = new FakeBillingStore();
+    const alreadyMigrated = migratedWorkflowJob();
+    store.jobs.push(structuredClone(alreadyMigrated) as unknown as Record<string, unknown>);
+
+    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+
+    assert.equal(result.jobsMigrated, 0);
+    assert.deepEqual(await store.getJob('sivadass-in-email'), alreadyMigrated);
+  });
+
+  // The migration is the documented preflight step, so it is the right place to
+  // discover a pre-existing document that `GET /jobs` would refuse to list.
+  it('fails when an already-migrated job is invalid instead of silently skipping it', async () => {
+    for (const [label, workflow] of [
+      ['no extract step', [{ id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' }]],
+      ['empty workflow', []],
+      [
+        'malformed step',
+        [
+          { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+          { id: 'settle', type: 'wait' },
+          {
+            id: 'extract-email',
+            type: 'extract',
+            fields: [{ key: 'email', selector: 'a', strategy: 'text' }],
+          },
+        ],
+      ],
+    ] as Array<[string, unknown]>) {
+      const store = new FakeBillingStore();
+      const broken = {
+        ...(migratedWorkflowJob() as unknown as Record<string, unknown>),
+        workflow,
+      };
+      store.jobs.push(broken);
+
+      await assert.rejects(
+        () => migrateGenericJobs({ store, env: baseEnv(), now: NOW }),
+        (error: unknown) =>
+          error instanceof ConfigError && error.message.includes('sivadass-in-email'),
+        label,
+      );
+      // Nothing was rewritten: the operator fixes the document, then re-runs.
+      assert.deepEqual(store.jobs, [broken], label);
+    }
+  });
+
   it('is idempotent across repeated runs: no duplicate jobs, secrets, or runs', async () => {
     const store = new FakeBillingStore();
     store.jobs.push(legacyTnpdclJob());
@@ -742,5 +822,48 @@ describe('migrateGenericJobs against a real createBillingStoreFromCollections st
       (await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' })).length,
       2,
     );
+  });
+
+  it('surfaces a pre-existing invalid workflow document during the migration preflight', async () => {
+    const { store, jobsCollection } = buildMongoLikeStore();
+    await store.upsertSettings({
+      ntfy: { baseUrl: 'https://ntfy.sh', topicEnv: 'NTFY_TOPIC', priority: 'default' },
+      mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
+      browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
+      jobsGeneration: 0,
+    });
+    // Inserted straight into the collection, like a document written before
+    // `upsertJob` validated: it has `engine`, so the migration would otherwise
+    // skip it and only `GET /jobs` would ever notice.
+    await jobsCollection.insertOne({
+      ...(migratedWorkflowJob() as unknown as Record<string, unknown>),
+      workflow: [{ id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' }],
+    });
+
+    await assert.rejects(
+      () => migrateGenericJobs({ store, env: baseEnv(), now: NOW }),
+      (error: unknown) =>
+        error instanceof ConfigError && error.message.includes('sivadass-in-email'),
+    );
+    await assert.rejects(() => store.listJobs(), ConfigError);
+  });
+
+  it('leaves a valid pre-existing workflow document alone', async () => {
+    const { store, jobsCollection } = buildMongoLikeStore();
+    await store.upsertSettings({
+      ntfy: { baseUrl: 'https://ntfy.sh', topicEnv: 'NTFY_TOPIC', priority: 'default' },
+      mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
+      browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
+      jobsGeneration: 0,
+    });
+    const valid = migratedWorkflowJob();
+    await jobsCollection.insertOne(
+      structuredClone(valid) as unknown as Record<string, unknown>,
+    );
+
+    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+
+    assert.deepEqual(result, { jobsMigrated: 0, watchesMigrated: 0, runsMigrated: 0 });
+    assert.deepEqual(await store.getJob('sivadass-in-email'), valid);
   });
 });

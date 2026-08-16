@@ -107,9 +107,10 @@ function createStore() {
   const watches = new MemoryCollection<WatchDocument>();
   const priceChecks = new MemoryCollection<PriceCheckDocument>();
   const secrets = new MemoryCollection<SecretDocument>();
+  const jobs = new MemoryCollection<Record<string, unknown>>();
   const store = createBillingStoreFromCollections(
     {
-      jobs: new MemoryCollection<Record<string, unknown>>(),
+      jobs,
       settings,
       overlays: new MemoryCollection<OverlayDocument>(),
       runs: new MemoryCollection<Record<string, unknown>>(),
@@ -120,7 +121,7 @@ function createStore() {
     },
     async () => {},
   );
-  return { store, users, settings, watches, priceChecks, secrets };
+  return { store, jobs, users, settings, watches, priceChecks, secrets };
 }
 
 function makeJob(overrides: Partial<JobDocument> = {}): JobDocument {
@@ -183,6 +184,27 @@ function makePriceCheck(overrides: Partial<PriceCheckDocument> = {}): PriceCheck
   };
 }
 
+function makeWorkflowJob(overrides: Partial<JobDocument> = {}): JobDocument {
+  const { adapterId: _adapterId, ...base } = makeJob();
+  return {
+    ...base,
+    id: 'sivadass-in-email',
+    name: 'Contact email',
+    startUrl: 'https://sivadass.in/',
+    engine: 'workflow',
+    schema: [{ key: 'email', label: 'Email', type: 'string' }],
+    workflow: [
+      { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+      {
+        id: 'extract-email',
+        type: 'extract',
+        fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+      },
+    ],
+    ...overrides,
+  };
+}
+
 describe('mongo store', () => {
   it('upsertJob and listJobs round-trip', async () => {
     const { store } = createStore();
@@ -194,6 +216,104 @@ describe('mongo store', () => {
     const jobs = await store.listJobs();
 
     assert.deepEqual(jobs, [job]);
+  });
+
+  it('upsertJob and listJobs round-trip a workflow job', async () => {
+    const { store } = createStore();
+    const job = makeWorkflowJob();
+
+    await store.upsertJob(job);
+
+    assert.deepEqual(await store.listJobs(), [job]);
+    assert.deepEqual(await store.getJob('sivadass-in-email'), job);
+  });
+
+  // `listJobs` validates on read, so a document that fails validation must never
+  // reach the collection in the first place: otherwise one bad internal write
+  // makes the whole job list unreadable.
+  it('upsertJob refuses to persist a document listJobs would reject', async () => {
+    const { store, jobs } = createStore();
+    const invalid: Array<[string, JobDocument]> = [
+      [
+        'workflow job with no extract step',
+        makeWorkflowJob({
+          workflow: [{ id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' }],
+        }),
+      ],
+      ['workflow job with an empty workflow', makeWorkflowJob({ workflow: [] })],
+      [
+        'wait step with neither selector nor timeout',
+        makeWorkflowJob({
+          workflow: [
+            { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+            { id: 'settle', type: 'wait' },
+            {
+              id: 'extract-email',
+              type: 'extract',
+              fields: [{ key: 'email', selector: 'a', strategy: 'text' }],
+            },
+          ],
+        }),
+      ],
+      [
+        'goto step pointing at a private host',
+        makeWorkflowJob({
+          workflow: [
+            { id: 'goto-home', type: 'goto', url: 'http://127.0.0.1/' },
+            {
+              id: 'extract-email',
+              type: 'extract',
+              fields: [{ key: 'email', selector: 'a', strategy: 'text' }],
+            },
+          ],
+        }),
+      ],
+      [
+        'extract field using text without a selector',
+        makeWorkflowJob({
+          workflow: [
+            { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+            {
+              id: 'extract-email',
+              type: 'extract',
+              fields: [{ key: 'email', strategy: 'text' }],
+            },
+          ],
+        }),
+      ],
+      [
+        'duplicate step ids',
+        makeWorkflowJob({
+          workflow: [
+            { id: 'same', type: 'goto', url: 'https://sivadass.in/' },
+            {
+              id: 'same',
+              type: 'extract',
+              fields: [{ key: 'email', selector: 'a', strategy: 'text' }],
+            },
+          ],
+        }),
+      ],
+    ];
+
+    for (const [label, job] of invalid) {
+      await assert.rejects(() => store.upsertJob(job), ConfigError, label);
+    }
+    assert.deepEqual(await jobs.find().toArray(), [], 'nothing should be stored');
+    assert.deepEqual(await store.listJobs(), []);
+  });
+
+  it('upsertJob keeps an existing document untouched when the update is invalid', async () => {
+    const { store } = createStore();
+    const stored = makeWorkflowJob();
+    await store.upsertJob(stored);
+
+    await assert.rejects(
+      () => store.upsertJob(makeWorkflowJob({ workflow: [], name: 'Broken' })),
+      ConfigError,
+    );
+
+    assert.deepEqual(await store.getJob('sivadass-in-email'), stored);
   });
 
   it('listJobs filters by userId when provided', async () => {

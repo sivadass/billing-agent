@@ -124,6 +124,7 @@ npm run dev -w @billing-agent/worker -- migrate-generic-jobs
 - Watches become `engine: 'workflow'` jobs with a deterministic `goto` + `extract` workflow (not runnable until the workflow interpreter ships); `price_checks` rows are copied into `runs`.
 - Settings keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; the resolved ntfy topic becomes `ntfy.defaultTopic` and `topicEnv` / `watchesGeneration` are dropped.
 - Safe to re-run: jobs that already have `engine` set, watches with an existing workflow job, and price checks with an existing run are all skipped. `watches` and `price_checks` are never deleted in this slice.
+- Preflight: a job that already has `engine` set is validated before it is skipped, so a stored document the API and runner would reject (for example a `workflow` job with no `extract` step) fails the migration naming the job id, instead of surfacing later as a broken `GET /jobs`. Nothing is rewritten — fix or delete the document and re-run. Writes go through the same validation, so only pre-existing documents can trip this.
 
 ## Commands
 
