@@ -862,17 +862,25 @@ describe('runWorkflow — extract failures and strategy seam', () => {
   });
 
   it('throws ScrapeError when a strategy has no registered handler', async () => {
+    // The canonical strategies are registered by default, so the handler is
+    // cleared here to prove the interpreter still fails closed for a strategy
+    // nothing implements.
     await assert.rejects(
-      run([
-        gotoFixture(),
-        {
-          id: 'extract-price',
-          type: 'extract',
-          fields: [{ key: 'price', strategy: 'price' }],
-        },
-      ]),
+      run(
+        [
+          gotoFixture(),
+          {
+            id: 'extract-price',
+            type: 'extract',
+            fields: [{ key: 'price', strategy: 'price' }],
+          },
+        ],
+        { extractStrategies: { price: undefined } },
+      ),
       (error: unknown) =>
-        error instanceof ScrapeError && /price/.test(error.message),
+        error instanceof ScrapeError &&
+        /price/.test(error.message) &&
+        /not available/.test(error.message),
     );
   });
 

@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import { ScrapeError } from '../errors.js';
+import { priceExtractStrategies } from '../extract/workflow-strategies.js';
 import type { ExtractFieldSpec, ExtractStrategy } from './types.js';
 
 export type ExtractedValue = string | number | null | undefined;
@@ -16,9 +17,9 @@ export type ExtractStrategyInput = {
  * `undefined` / `null` / `''` means "not found" — the interpreter turns that
  * into a `ScrapeError` naming the field, so handlers never have to.
  *
- * Handlers must stay deterministic: no LLM calls, no `page.evaluate`. This is
- * the seam the extract modules plug the price cascade into; core keeps owning
- * the registry so the interpreter never imports the price-monitor package.
+ * Handlers must stay deterministic: no LLM calls, no `page.evaluate`. Callers
+ * may still override a strategy (tests inject stubs, authoring may narrow one),
+ * which is why the registry stays open.
  */
 export type ExtractStrategyHandler = (
   input: ExtractStrategyInput,
@@ -51,9 +52,15 @@ export const textExtractStrategy: ExtractStrategyHandler = async ({
   return (await locator.textContent().catch(() => null))?.trim() ?? undefined;
 };
 
-/** Strategies core implements on its own. `price` / `json_ld` / `shopify_json` are supplied by the extract modules. */
+/**
+ * Every canonical strategy, so a validated workflow always has a handler for
+ * what it asks for: `text` here, and the deterministic price cascade from the
+ * extract modules. Anything unregistered fails closed in
+ * `resolveExtractStrategy`.
+ */
 export const defaultExtractStrategies: ExtractStrategyRegistry = Object.freeze({
   text: textExtractStrategy,
+  ...priceExtractStrategies,
 });
 
 export function resolveExtractStrategy(
