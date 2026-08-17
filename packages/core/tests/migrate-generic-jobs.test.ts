@@ -125,6 +125,10 @@ class FakeBillingStore implements BillingStore {
     return null;
   }
 
+  async listConversations(): Promise<[]> {
+    return [];
+  }
+
   async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {
     return options?.userId
       ? this.watches.filter((watch) => watch.userId === options.userId)

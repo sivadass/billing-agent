@@ -212,6 +212,10 @@ export interface BillingStore {
   deleteSecretsForJob(jobId: string): Promise<void>;
   upsertConversation(conversation: ConversationDocument): Promise<void>;
   getConversation(id: string): Promise<ConversationDocument | null>;
+  listConversations(options?: {
+    userId?: string;
+    status?: ConversationStatus | ConversationStatus[];
+  }): Promise<ConversationDocument[]>;
   listWatches(options?: { userId?: string }): Promise<WatchDocument[]>;
   getWatch(id: string): Promise<WatchDocument | null>;
   upsertWatch(watch: WatchDocument): Promise<void>;

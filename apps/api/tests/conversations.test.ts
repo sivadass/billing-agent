@@ -88,6 +88,21 @@ class ConversationMemoryStore implements BillingStore {
     return this.conversations.get(id) ?? null;
   }
 
+  async listConversations(options?: {
+    userId?: string;
+    status?: ConversationDocument['status'] | ConversationDocument['status'][];
+  }): Promise<ConversationDocument[]> {
+    let conversations = [...this.conversations.values()];
+    if (options?.userId) {
+      conversations = conversations.filter((c) => c.userId === options.userId);
+    }
+    if (options?.status !== undefined) {
+      const allowed = Array.isArray(options.status) ? options.status : [options.status];
+      conversations = conversations.filter((c) => allowed.includes(c.status));
+    }
+    return conversations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
   async listWatches() {
     return [];
   }

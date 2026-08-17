@@ -446,7 +446,7 @@ Routes from spec. `onAuthorConversation` optional → 503 if missing on POST cre
 
 GET conversation strips nothing from messages except ensuring no secret plaintext (redact helper).
 
-- [ ] Tests: confirm in `active` → 409; secrets in `active` → 409; confirm in `confirming` creates job with `engine: 'workflow'`, `secretIds` set, conversation `saved`.
+- [x] Tests: confirm in `active` → 409; secrets in `active` → 409; confirm in `confirming` creates job with `engine: 'workflow'`, `secretIds` set, conversation `saved`.
 
 ### Task 12: `packages/authoring` agent loop
 

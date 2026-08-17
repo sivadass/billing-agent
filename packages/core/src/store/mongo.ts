@@ -266,6 +266,23 @@ export function createBillingStoreFromCollections(
       return collections.conversations.findOne({ id });
     },
 
+    async listConversations(options) {
+      const statusFilter = options?.status;
+      const conversations = await collections.conversations
+        .find({
+          ...(options?.userId ? { userId: options.userId } : {}),
+        })
+        .toArray();
+      let filtered = conversations;
+      if (statusFilter !== undefined) {
+        const allowed = Array.isArray(statusFilter) ? statusFilter : [statusFilter];
+        filtered = conversations.filter((conversation) =>
+          allowed.includes(conversation.status),
+        );
+      }
+      return filtered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+
     async listWatches(options) {
       const watches = await collections.watches
         .find(options?.userId ? { userId: options.userId } : {})
