@@ -8,13 +8,13 @@ import type {
   JobDocument,
   OverlayDocument,
   OverlaySuccessInput,
-  PriceCheckDocument,
   RunDocument,
   SecretDocument,
   SettingsDocument,
   UserDocument,
-  WatchDocument,
 } from './types.js';
+import type { LegacyMigrationSource } from '../migrate-generic-jobs.js';
+import { createMongoLegacyMigrationSource } from '../migrate-generic-jobs.js';
 
 const SETTINGS_ID: SettingsDocument['id'] = 'default';
 
@@ -46,8 +46,6 @@ type StoreCollections = {
   runs: CollectionLike<Record<string, unknown>>;
   secrets: CollectionLike<SecretDocument>;
   conversations: CollectionLike<ConversationDocument>;
-  watches: CollectionLike<WatchDocument>;
-  priceChecks: CollectionLike<PriceCheckDocument>;
   users: CollectionLike<UserDocument>;
 };
 
@@ -61,7 +59,6 @@ function normalizeSettings(
   return {
     ...settings,
     jobsGeneration: settings.jobsGeneration ?? 0,
-    watchesGeneration: settings.watchesGeneration ?? 0,
   };
 }
 
@@ -283,52 +280,6 @@ export function createBillingStoreFromCollections(
       return filtered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     },
 
-    async listWatches(options) {
-      const watches = await collections.watches
-        .find(options?.userId ? { userId: options.userId } : {})
-        .toArray();
-      return watches.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    },
-
-    async getWatch(id) {
-      return collections.watches.findOne({ id });
-    },
-
-    async upsertWatch(watch) {
-      await collections.watches.updateOne(
-        { id: watch.id },
-        { $set: watch },
-        { upsert: true },
-      );
-    },
-
-    async deleteWatch(id) {
-      await collections.priceChecks.deleteMany({ watchId: id });
-      await collections.watches.deleteOne({ id });
-    },
-
-    async createPriceCheck(check) {
-      await collections.priceChecks.insertOne(check);
-    },
-
-    async finishPriceCheck(id, update) {
-      await collections.priceChecks.updateOne({ id }, { $set: update });
-    },
-
-    async listPriceChecks(options) {
-      const checks = await collections.priceChecks
-        .find({
-          watchId: options.watchId,
-          ...(options.userId ? { userId: options.userId } : {}),
-        })
-        .toArray();
-      const sorted = checks.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
-      if (options.limit && options.limit > 0) {
-        return sorted.slice(0, options.limit);
-      }
-      return sorted;
-    },
-
     async listActiveOverlays(input) {
       const overlays = await collections.overlays
         .find({
@@ -446,13 +397,34 @@ export function createBillingStoreFromCollections(
 export async function connectStore(uri: string): Promise<BillingStore> {
   const client = new MongoClient(uri);
   await client.connect();
+  const { store } = await buildStoreFromClient(client);
+  return store;
+}
+
+export async function connectStoreForMigration(uri: string): Promise<{
+  store: BillingStore;
+  legacy: LegacyMigrationSource;
+  close: () => Promise<void>;
+}> {
+  const client = new MongoClient(uri);
+  await client.connect();
+  const built = await buildStoreFromClient(client);
+  return {
+    store: built.store,
+    legacy: built.legacy,
+    close: () => client.close(),
+  };
+}
+
+async function buildStoreFromClient(client: MongoClient): Promise<{
+  store: BillingStore;
+  legacy: LegacyMigrationSource;
+}> {
   const db = client.db();
   const users = db.collection<UserDocument>('users');
-  const watches = db.collection<WatchDocument>('watches');
-  const priceChecks = db.collection<PriceCheckDocument>('price_checks');
   const secrets = db.collection<SecretDocument>('secrets');
-  await ensureStoreIndexes({ users, watches, priceChecks, secrets });
-  return createBillingStoreFromCollections(
+  await ensureStoreIndexes({ users, secrets });
+  const store = createBillingStoreFromCollections(
     {
       jobs: db.collection('jobs') as unknown as CollectionLike<Record<string, unknown>>,
       settings: db.collection<SettingsDocument>('settings'),
@@ -460,12 +432,11 @@ export async function connectStore(uri: string): Promise<BillingStore> {
       runs: db.collection('runs') as unknown as CollectionLike<Record<string, unknown>>,
       secrets,
       conversations: db.collection<ConversationDocument>('conversations'),
-      watches,
-      priceChecks,
       users,
     },
     async () => {
       await client.close();
     },
   );
+  return { store, legacy: createMongoLegacyMigrationSource(db) };
 }

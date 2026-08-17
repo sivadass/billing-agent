@@ -88,7 +88,7 @@ async function readShopifyProduct(
  * network call is the public Shopify product JSON endpoint. There is no LLM
  * fallback: a scheduled replay must never spend tokens, so a strategy that
  * cannot find its value returns `undefined` and the interpreter fails the field
- * closed. `extractPrice` (the price-monitor watch pipeline) keeps the Mistral
+ * closed. `extractPrice` keeps the Mistral fallback for standalone price
  * leg for interactive use.
  */
 export function createPriceExtractStrategies(

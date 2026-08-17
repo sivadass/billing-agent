@@ -25,7 +25,7 @@ function compactHtmlForLlm(html: string): string {
 }
 
 /**
- * The price-monitor watch pipeline: Shopify product JSON → page structured
+ * Price extraction pipeline: Shopify product JSON → page structured
  * markup → optional Mistral fallback. The LLM leg only runs when the caller
  * passes a key, and scheduled workflow runs never do — the interpreter's
  * `price` strategy uses the deterministic cascade in `workflow-strategies.ts`

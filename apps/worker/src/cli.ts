@@ -5,6 +5,7 @@ import {
   AppError,
   ConfigError,
   connectStore,
+  connectStoreForMigration,
   createBrowserLock,
   hashPassword,
   loadConfigFromStore,
@@ -13,10 +14,7 @@ import {
   registerBuiltInAdapters,
   runJob,
   runJobs,
-  sendNtfy,
-  withBrowser,
 } from '@billing-agent/core';
-import { runWatch, runWatches } from '@billing-agent/price-monitor';
 import {
   expireStaleAuthoringSessions,
   handleAuthoringTurn,
@@ -77,14 +75,6 @@ function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): number {
   return port;
 }
 
-function browserLoadHtmlFactory(app: Awaited<ReturnType<typeof loadConfigFromStore>>) {
-  return async (url: string): Promise<string> =>
-    withBrowser(app.browser, async (page) => {
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
-      return page.content();
-    });
-}
-
 program
   .command('run')
   .option('--job <id>', 'run a single job id')
@@ -106,63 +96,6 @@ program
       process.exitCode = failed > 0 ? 1 : 0;
     }),
   );
-
-program
-  .command('run-watch')
-  .requiredOption('--id <id>', 'run a single watch id')
-  .action(
-    withErrorHandling(async (options: { id: string }) => {
-      const store = await connectStore(requireMongoUri());
-      try {
-        const app = await loadConfigFromStore(store);
-        const watch = await store.getWatch(options.id);
-        if (!watch) {
-          throw new ConfigError(`Unknown watch id: ${options.id}`);
-        }
-        const check = await runWatch({
-          watch,
-          store,
-          sendNtfy,
-          ntfy: {
-            baseUrl: app.ntfy.baseUrl,
-            topic: app.ntfy.topic,
-            priority: app.ntfy.priority,
-          },
-          browserLoadHtml: browserLoadHtmlFactory(app),
-          mistralApiKey: process.env[app.mistral.apiKeyEnv],
-          mistralModel: app.mistral.model,
-        });
-        process.exitCode = check.status === 'failed' ? 1 : 0;
-      } finally {
-        await store.close();
-      }
-    }),
-  );
-
-program
-  .command('run-watches')
-  .action(withErrorHandling(async () => {
-    const store = await connectStore(requireMongoUri());
-    try {
-      const app = await loadConfigFromStore(store);
-      const checks = await runWatches({
-        watches: await store.listWatches(),
-        store,
-        sendNtfy,
-        ntfy: {
-          baseUrl: app.ntfy.baseUrl,
-          topic: app.ntfy.topic,
-          priority: app.ntfy.priority,
-        },
-        browserLoadHtml: browserLoadHtmlFactory(app),
-        mistralApiKey: process.env[app.mistral.apiKeyEnv],
-        mistralModel: app.mistral.model,
-      });
-      process.exitCode = checks.some((check) => check.status === 'failed') ? 1 : 0;
-    } finally {
-      await store.close();
-    }
-  }));
 
 program
   .command('daemon')
@@ -225,43 +158,6 @@ program
                 error instanceof Error ? error.message : error,
               );
             });
-        });
-      },
-      onRunWatch: async (watchId: string) => {
-        const latest = await loadConfigFromStore(store);
-        const watch = await store.getWatch(watchId);
-        if (!watch) {
-          throw new ConfigError(`Unknown watch id: ${watchId}`);
-        }
-
-        return await new Promise<string>((resolve, reject) => {
-          let reported = false;
-          void runWatch({
-            watch,
-            store,
-            sendNtfy,
-            ntfy: {
-              baseUrl: latest.ntfy.baseUrl,
-              topic: latest.ntfy.topic,
-              priority: latest.ntfy.priority,
-            },
-            browserLoadHtml: browserLoadHtmlFactory(latest),
-            mistralApiKey: process.env[latest.mistral.apiKeyEnv],
-            mistralModel: latest.mistral.model,
-            onCheckCreated: (checkId) => {
-              reported = true;
-              resolve(checkId);
-            },
-          }).catch((error: unknown) => {
-            if (!reported) {
-              reject(error instanceof Error ? error : new Error(String(error)));
-              return;
-            }
-            console.error(
-              `[daemon] watch run for ${watchId} failed after start:`,
-              error instanceof Error ? error.message : error,
-            );
-          });
         });
       },
     });
@@ -342,14 +238,16 @@ program
   )
   .action(
     withErrorHandling(async () => {
-      const store = await connectStore(requireMongoUri());
+      const { store, legacy, close } = await connectStoreForMigration(requireMongoUri());
       try {
-        const result = await migrateGenericJobs({ store, env: process.env });
+        const result = await migrateGenericJobs({ store, env: process.env, legacy });
         console.log(
-          `Migrated ${result.jobsMigrated} job(s), ${result.watchesMigrated} watch(es), ${result.runsMigrated} run(s)`,
+          `Migrated ${result.jobsMigrated} job(s), ${result.watchesMigrated} watch(es), ${result.runsMigrated} run(s)${
+            result.legacyCollectionsDropped ? '; dropped legacy watch collections' : ''
+          }`,
         );
       } finally {
-        await store.close();
+        await close();
       }
     }),
   );

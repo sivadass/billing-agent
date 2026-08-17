@@ -15,8 +15,8 @@ apps/
   web/       # @billing-agent/web (Vite + React API shell)
   worker/    # @billing-agent/worker (CLI + scheduler daemon)
 packages/
-  core/      # @billing-agent/core (adapters, config, runner, recovery, store)
-  price-monitor/ # @billing-agent/price-monitor (price extraction, compare, watch runner)
+  core/      # @billing-agent/core (adapters, config, runner, recovery, store, workflow)
+  authoring/ # @billing-agent/authoring (chat authoring agent)
 ```
 
 ## Requirements
@@ -122,8 +122,8 @@ npm run dev -w @billing-agent/worker -- migrate-generic-jobs
 
 - Legacy billing jobs (`provider` + `credentialsEnv`): each `credentialsEnv` entry is resolved from `process.env` and encrypted into a `secrets` row (never written to the job document); the job gets `engine: 'adapter'`, `adapterId: provider`, and the adapter's default `startUrl`.
 - Watches become `engine: 'workflow'` jobs with a deterministic `goto` + `extract` workflow (not runnable until the workflow interpreter ships); `price_checks` rows are copied into `runs`.
-- Settings keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; the resolved ntfy topic becomes `ntfy.defaultTopic` and `topicEnv` / `watchesGeneration` are dropped.
-- Safe to re-run: jobs that already have `engine` set, watches with an existing workflow job, and price checks with an existing run are all skipped. `watches` and `price_checks` are never deleted in this slice.
+- Settings keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; the resolved ntfy topic becomes `ntfy.defaultTopic` and `topicEnv` is dropped.
+- Safe to re-run: jobs that already have `engine` set, watches with an existing workflow job, and price checks with an existing run are all skipped. After every legacy watch has a corresponding workflow job, the `watches` and `price_checks` collections are dropped.
 - Preflight: a job that already has `engine` set is validated before it is skipped, so a stored document the API and runner would reject (for example a `workflow` job with no `extract` step) fails the migration naming the job id, instead of surfacing later as a broken `GET /jobs`. Nothing is rewritten — fix or delete the document and re-run. Writes go through the same validation, so only pre-existing documents can trip this.
 
 ## Commands
@@ -137,12 +137,6 @@ npm run dev -w @billing-agent/worker -- run --job smoke-test
 
 # Run all enabled jobs once
 npm run dev -w @billing-agent/worker -- run --all
-
-# Run one watch immediately
-npm run dev -w @billing-agent/worker -- run-watch --id craft-glory-old-skool-vb
-
-# Run all enabled watches once
-npm run dev -w @billing-agent/worker -- run-watches
 
 # Long-running daemon: scheduler + embedded HTTP API
 npm run start
@@ -164,13 +158,7 @@ Base URL: `http://localhost:${HTTP_PORT:-8080}`
 - `POST /jobs/:id/run` (manual trigger, returns `202 { id }`)
 - `PATCH /jobs/:id`
 - `DELETE /jobs/:id` (soft-disable via `enabled: false`)
-- `GET /watches`
-- `POST /watches`
-- `GET /watches/:id`
-- `PATCH /watches/:id`
-- `DELETE /watches/:id` (hard delete + cascades `price_checks`)
-- `POST /watches/:id/check` (manual trigger, returns `202 { id }`, `409` if running)
-- `GET /watches/:id/checks`
+- `GET /conversations`, `POST /conversations`, … (chat authoring)
 
 `/jobs` and `/runs` routes are scoped to the authenticated user; accessing another user's job/run returns `404`.
 
@@ -300,15 +288,11 @@ Collection variables:
 
 The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`, `/jobs/:id/secrets`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
 
-## Price monitor notes
+## Workflow job notes
 
-- Default watch schedule: `0 9 * * *` with cron timezone `Asia/Kolkata` (IST).
-- Alert rule (v1): notify only when the new price is lower than the previous successful price **and** currency/source match.
-- First successful check creates the baseline and does not notify.
-- Currency/source changes reset the baseline (no notify).
-- Non-positive extracted prices are treated as failed checks (no baseline update, no notify).
-- SSRF protection blocks obvious local/private/link-local/metadata targets before Shopify fetch and browser navigation.
-- Residual risk accepted in v1: DNS rebinding after validation is not mitigated.
+- Price-tracking jobs use `engine: 'workflow'` with extract strategies (`shopify_json`, `price`, etc.) defined in the job's workflow.
+- Default cron timezone for scheduled jobs: `Asia/Kolkata` (IST).
+- Notify rule `on: 'drop'` compares the new extract result to `lastResult` and sends only when the price decreases (same semantics as the old price-watch stack).
 
 ## Overlay learning behavior
 
@@ -349,7 +333,7 @@ Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VIT
 
 - `/login` (public)
 - `/jobs`, `/jobs/new`, `/jobs/:jobId`
-- `/watches`, `/watches/new`, `/watches/:watchId/edit`, `/watches/:watchId`
+- `/chat`, `/chat/:conversationId` (author a workflow job via chat)
 - `/runs`, `/runs/:runId` (polls run detail while running)
 - `/status`
 

@@ -5,13 +5,11 @@ import { createBillingStoreFromCollections } from '../src/store/mongo.ts';
 import type {
   JobDocument,
   OverlayDocument,
-  PriceCheckDocument,
   RunDocument,
   SelectorOverlayPatch,
   SecretDocument,
   SettingsDocument,
   UserDocument,
-  WatchDocument,
 } from '../src/store/types.ts';
 
 type Query<T> = Partial<{ [K in keyof T]: T[K] }>;
@@ -104,8 +102,6 @@ class MemoryCollection<T extends Record<string, unknown>> {
 function createStore() {
   const users = new MemoryCollection<UserDocument>();
   const settings = new MemoryCollection<SettingsDocument>();
-  const watches = new MemoryCollection<WatchDocument>();
-  const priceChecks = new MemoryCollection<PriceCheckDocument>();
   const secrets = new MemoryCollection<SecretDocument>();
   const jobs = new MemoryCollection<Record<string, unknown>>();
   const store = createBillingStoreFromCollections(
@@ -115,13 +111,12 @@ function createStore() {
       overlays: new MemoryCollection<OverlayDocument>(),
       runs: new MemoryCollection<Record<string, unknown>>(),
       secrets,
-      watches,
-      priceChecks,
+      conversations: new MemoryCollection(),
       users,
     },
     async () => {},
   );
-  return { store, jobs, users, settings, watches, priceChecks, secrets };
+  return { store, jobs, users, settings, secrets };
 }
 
 function makeJob(overrides: Partial<JobDocument> = {}): JobDocument {
@@ -146,40 +141,6 @@ function makeJob(overrides: Partial<JobDocument> = {}): JobDocument {
     lastResult: null,
     createdAt: '2026-08-09T00:00:00.000Z',
     updatedAt: '2026-08-09T00:00:00.000Z',
-    ...overrides,
-  };
-}
-
-function makeWatch(overrides: Partial<WatchDocument> = {}): WatchDocument {
-  return {
-    id: 'watch-1',
-    userId: 'user-1',
-    url: 'https://example.com/product',
-    title: 'Example Product',
-    enabled: true,
-    schedule: '0 9 * * *',
-    lastPrice: null,
-    lastCurrency: null,
-    lastSource: null,
-    lastCheckedAt: null,
-    createdAt: '2026-08-11T00:00:00.000Z',
-    ...overrides,
-  };
-}
-
-function makePriceCheck(overrides: Partial<PriceCheckDocument> = {}): PriceCheckDocument {
-  return {
-    id: 'check-1',
-    watchId: 'watch-1',
-    userId: 'user-1',
-    status: 'running',
-    price: null,
-    currency: null,
-    source: null,
-    previousPrice: null,
-    dropped: null,
-    error: null,
-    checkedAt: '2026-08-11T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -376,79 +337,7 @@ describe('mongo store', () => {
     assert.deepEqual(user1Runs, [runForUser1]);
   });
 
-  it('upsertWatch and listWatches round-trip with user filtering', async () => {
-    const { store } = createStore();
-    const watchForUser1 = makeWatch({ id: 'watch-1', userId: 'user-1' });
-    const watchForUser2 = makeWatch({
-      id: 'watch-2',
-      userId: 'user-2',
-      url: 'https://example.com/other',
-    });
-
-    await store.upsertWatch(watchForUser1);
-    await store.upsertWatch(watchForUser2);
-
-    const all = await store.listWatches();
-    assert.deepEqual(
-      all.map((watch) => watch.id).sort(),
-      ['watch-1', 'watch-2'],
-    );
-
-    const user1 = await store.listWatches({ userId: 'user-1' });
-    assert.deepEqual(user1, [watchForUser1]);
-  });
-
-  it('createPriceCheck and finishPriceCheck update persisted checks', async () => {
-    const { store } = createStore();
-    const check = makePriceCheck({
-      id: 'check-1',
-      checkedAt: '2026-08-11T00:00:00.000Z',
-    });
-    const newer = makePriceCheck({
-      id: 'check-2',
-      checkedAt: '2026-08-11T00:05:00.000Z',
-      status: 'success',
-      price: 4999,
-      currency: 'INR',
-      source: 'shopify_json',
-    });
-
-    await store.createPriceCheck(check);
-    await store.createPriceCheck(newer);
-    await store.finishPriceCheck('check-1', {
-      status: 'failed',
-      error: 'extract failed',
-    });
-
-    const checks = await store.listPriceChecks({
-      watchId: 'watch-1',
-      userId: 'user-1',
-    });
-    assert.equal(checks.length, 2);
-    assert.equal(checks[0]?.id, 'check-2');
-    assert.equal(checks[1]?.id, 'check-1');
-    assert.equal(checks[1]?.status, 'failed');
-    assert.equal(checks[1]?.error, 'extract failed');
-  });
-
-  it('deleteWatch cascades price_checks before deleting the watch', async () => {
-    const { store } = createStore();
-    await store.upsertWatch(makeWatch({ id: 'watch-a' }));
-    await store.upsertWatch(makeWatch({ id: 'watch-b' }));
-    await store.createPriceCheck(makePriceCheck({ id: 'check-a', watchId: 'watch-a' }));
-    await store.createPriceCheck(makePriceCheck({ id: 'check-b', watchId: 'watch-b' }));
-
-    await store.deleteWatch('watch-a');
-
-    const watches = await store.listWatches();
-    assert.deepEqual(watches.map((watch) => watch.id), ['watch-b']);
-    const checksForDeleted = await store.listPriceChecks({ watchId: 'watch-a' });
-    const checksForLive = await store.listPriceChecks({ watchId: 'watch-b' });
-    assert.equal(checksForDeleted.length, 0);
-    assert.equal(checksForLive.length, 1);
-  });
-
-  it('getSettings backfills missing watchesGeneration to zero', async () => {
+  it('getSettings backfills missing jobsGeneration to zero', async () => {
     const { store, settings } = createStore();
     await settings.insertOne({
       id: 'default',
@@ -460,10 +349,9 @@ describe('mongo store', () => {
 
     const loaded = await store.getSettings();
     assert.equal(loaded.jobsGeneration, 7);
-    assert.equal(loaded.watchesGeneration, 0);
   });
 
-  it('upsertSettings backfills missing generation fields to zero', async () => {
+  it('upsertSettings backfills missing jobsGeneration to zero', async () => {
     const { store } = createStore();
     await (store as unknown as {
       upsertSettings(settings: Record<string, unknown>): Promise<void>;
@@ -475,7 +363,6 @@ describe('mongo store', () => {
 
     const loaded = await store.getSettings();
     assert.equal(loaded.jobsGeneration, 0);
-    assert.equal(loaded.watchesGeneration, 0);
   });
 
   it('findUserByEmail matches lowercase email and getUser looks up by id', async () => {
@@ -507,8 +394,7 @@ describe('mongo store', () => {
         overlays: new MemoryCollection<OverlayDocument>(),
         runs: new MemoryCollection<Record<string, unknown>>(),
         secrets: new MemoryCollection<SecretDocument>(),
-        watches: new MemoryCollection<WatchDocument>(),
-        priceChecks: new MemoryCollection<PriceCheckDocument>(),
+        conversations: new MemoryCollection(),
         users: new MemoryCollection<UserDocument>(),
       },
       async () => {},
@@ -596,8 +482,7 @@ describe('mongo store', () => {
         overlays: new MemoryCollection<OverlayDocument>(),
         runs: new MemoryCollection<Record<string, unknown>>(),
         secrets,
-        watches: new MemoryCollection<WatchDocument>(),
-        priceChecks: new MemoryCollection<PriceCheckDocument>(),
+        conversations: new MemoryCollection(),
         users: new MemoryCollection<UserDocument>(),
       },
       async () => {},
@@ -637,8 +522,7 @@ describe('mongo store', () => {
         overlays: new MemoryCollection<OverlayDocument>(),
         runs,
         secrets,
-        watches: new MemoryCollection<WatchDocument>(),
-        priceChecks: new MemoryCollection<PriceCheckDocument>(),
+        conversations: new MemoryCollection(),
         users: new MemoryCollection<UserDocument>(),
       },
       async () => {},

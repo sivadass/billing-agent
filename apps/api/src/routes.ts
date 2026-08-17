@@ -4,11 +4,9 @@ import type {
   BillingStore,
   BrowserLock,
   JobDocument,
-  PriceSource,
   RunDocument,
   SecretDocument,
   SettingsDocument,
-  WatchDocument,
 } from '@billing-agent/core';
 import {
   assertJobDocument,
@@ -18,7 +16,6 @@ import {
   parseMasterKey,
   verifyPassword,
 } from '@billing-agent/core';
-import { isWatchLocked } from '@billing-agent/price-monitor';
 import { requireJwtAuth } from './auth.js';
 import { handleConversationRoutes } from './conversation-routes.js';
 import { signAccessToken } from './jwt.js';
@@ -27,7 +24,6 @@ export type RouteContext = {
   jwtSecret: string;
   store: BillingStore;
   onRunJob?: (jobId: string) => Promise<string>;
-  onRunWatch?: (watchId: string) => Promise<string>;
   onAuthorConversation?: (conversationId: string) => Promise<void>;
   authUser?: { id: string; email: string };
   env?: NodeJS.ProcessEnv;
@@ -39,18 +35,6 @@ export type RouteContext = {
    */
   lock?: BrowserLock;
 };
-
-const DEFAULT_WATCH_SCHEDULE = '0 9 * * *';
-
-function isPriceSource(value: string): value is PriceSource {
-  return (
-    value === 'shopify_json' ||
-    value === 'json_ld' ||
-    value === 'og' ||
-    value === 'selector' ||
-    value === 'llm'
-  );
-}
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
@@ -268,66 +252,6 @@ function toRunResponse(run: RunDocument): RunDocument {
   };
 }
 
-function coerceWatchDocument(
-  payload: unknown,
-  userId: string,
-  fallback?: WatchDocument,
-): WatchDocument {
-  if (!isObject(payload)) throw new Error('watch payload must be an object');
-  const base = fallback ?? {
-    id: '',
-    userId,
-    url: '',
-    title: null,
-    enabled: true,
-    schedule: DEFAULT_WATCH_SCHEDULE,
-    lastPrice: null,
-    lastCurrency: null,
-    lastSource: null,
-    lastCheckedAt: null,
-    createdAt: new Date().toISOString(),
-  };
-
-  const watch: WatchDocument = {
-    id: typeof payload.id === 'string' ? payload.id : base.id,
-    userId,
-    url: typeof payload.url === 'string' ? payload.url : base.url,
-    title:
-      payload.title === null || typeof payload.title === 'string'
-        ? payload.title
-        : base.title,
-    enabled: typeof payload.enabled === 'boolean' ? payload.enabled : base.enabled,
-    schedule:
-      payload.schedule === null || typeof payload.schedule === 'string'
-        ? payload.schedule
-        : base.schedule,
-    lastPrice:
-      typeof payload.lastPrice === 'number' || payload.lastPrice === null
-        ? payload.lastPrice
-        : base.lastPrice,
-    lastCurrency:
-      payload.lastCurrency === null || typeof payload.lastCurrency === 'string'
-        ? payload.lastCurrency
-        : base.lastCurrency,
-    lastSource:
-      payload.lastSource === null
-        ? null
-        : typeof payload.lastSource === 'string' && isPriceSource(payload.lastSource)
-          ? payload.lastSource
-          : base.lastSource,
-    lastCheckedAt:
-      payload.lastCheckedAt === null || typeof payload.lastCheckedAt === 'string'
-        ? payload.lastCheckedAt
-        : base.lastCheckedAt,
-    createdAt: typeof payload.createdAt === 'string' ? payload.createdAt : base.createdAt,
-  };
-
-  if (!watch.id) throw new Error('watch.id is required');
-  if (!watch.url) throw new Error('watch.url is required');
-  assertPublicHttpUrl(watch.url);
-  return watch;
-}
-
 /**
  * Matches `/jobs/{id}/{suffix}` for a single path segment id, so a job
  * subresource is never mistaken for a job id by the `/jobs/:id` routes.
@@ -451,18 +375,6 @@ async function bumpJobsGeneration(store: BillingStore): Promise<void> {
   const updated: Omit<SettingsDocument, 'id'> = {
     ...withoutId,
     jobsGeneration: settings.jobsGeneration + 1,
-    watchesGeneration: settings.watchesGeneration ?? 0,
-  };
-  await store.upsertSettings(updated);
-}
-
-async function bumpWatchesGeneration(store: BillingStore): Promise<void> {
-  const settings = await store.getSettings();
-  const { id: _id, ...withoutId } = settings;
-  const updated: Omit<SettingsDocument, 'id'> = {
-    ...withoutId,
-    jobsGeneration: settings.jobsGeneration ?? 0,
-    watchesGeneration: (settings.watchesGeneration ?? 0) + 1,
   };
   await store.upsertSettings(updated);
 }
@@ -694,159 +606,6 @@ export async function handleRoute(
     await ctx.store.upsertJob(disabled);
     await bumpJobsGeneration(ctx.store);
     sendJson(res, 200, toJobResponse(disabled));
-    return;
-  }
-
-  if (method === 'GET' && pathname === '/watches') {
-    const watches = await ctx.store.listWatches({ userId: user.userId });
-    sendJson(res, 200, watches);
-    return;
-  }
-
-  if (method === 'POST' && pathname === '/watches') {
-    try {
-      const body = await readJsonBody(req);
-      const watchPayload = isObject(body) ? body : {};
-      const watch = coerceWatchDocument(
-        {
-          ...watchPayload,
-          id:
-            isObject(body) && typeof body.id === 'string'
-              ? body.id
-              : `watch-${Date.now()}`,
-          schedule:
-            isObject(body) && body.schedule !== undefined
-              ? body.schedule
-              : DEFAULT_WATCH_SCHEDULE,
-          createdAt: new Date().toISOString(),
-          userId: user.userId,
-          lastPrice: null,
-          lastCurrency: null,
-          lastSource: null,
-          lastCheckedAt: null,
-        },
-        user.userId,
-      );
-      await ctx.store.upsertWatch(watch);
-      await bumpWatchesGeneration(ctx.store);
-      sendJson(res, 201, watch);
-      return;
-    } catch (error) {
-      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-  }
-
-  if (method === 'GET' && pathname.startsWith('/watches/') && pathname.endsWith('/checks')) {
-    const rawWatchId = pathname.slice('/watches/'.length, -'/checks'.length);
-    if (!rawWatchId || rawWatchId.endsWith('/') || rawWatchId.includes('/')) {
-      sendJson(res, 404, { error: 'Not found' });
-      return;
-    }
-    const watchId = decodeURIComponent(rawWatchId);
-    const watch = await ctx.store.getWatch(watchId);
-    if (!watch || watch.userId !== user.userId) {
-      sendJson(res, 404, { error: 'Watch not found' });
-      return;
-    }
-    const limitText = url.searchParams.get('limit');
-    const limit = limitText ? Number(limitText) : undefined;
-    const checks = await ctx.store.listPriceChecks({
-      watchId,
-      userId: user.userId,
-      limit: Number.isFinite(limit) ? limit : undefined,
-    });
-    sendJson(res, 200, checks);
-    return;
-  }
-
-  if (method === 'POST' && pathname.startsWith('/watches/') && pathname.endsWith('/check')) {
-    const rawWatchId = pathname.slice('/watches/'.length, -'/check'.length);
-    if (!rawWatchId || rawWatchId.endsWith('/') || rawWatchId.includes('/')) {
-      sendJson(res, 404, { error: 'Not found' });
-      return;
-    }
-    if (!ctx.onRunWatch) {
-      sendJson(res, 503, { error: 'Runner unavailable' });
-      return;
-    }
-    const watchId = decodeURIComponent(rawWatchId);
-    const watch = await ctx.store.getWatch(watchId);
-    if (!watch || watch.userId !== user.userId) {
-      sendJson(res, 404, { error: 'Watch not found' });
-      return;
-    }
-    if (isWatchLocked(watchId)) {
-      sendJson(res, 409, { error: 'Watch already running' });
-      return;
-    }
-    const recentChecks = await ctx.store.listPriceChecks({
-      watchId,
-      userId: user.userId,
-      limit: 20,
-    });
-    if (recentChecks.some((check) => check.status === 'running')) {
-      sendJson(res, 409, { error: 'Watch already running' });
-      return;
-    }
-    try {
-      const checkId = await ctx.onRunWatch(watchId);
-      sendJson(res, 202, { id: checkId });
-      return;
-    } catch (error) {
-      if (error instanceof Error && /already running/i.test(error.message)) {
-        sendJson(res, 409, { error: 'Watch already running' });
-        return;
-      }
-      throw error;
-    }
-  }
-
-  if (method === 'GET' && pathname.startsWith('/watches/')) {
-    const watchId = decodeURIComponent(pathname.slice('/watches/'.length));
-    const watch = await ctx.store.getWatch(watchId);
-    if (!watch || watch.userId !== user.userId) {
-      sendJson(res, 404, { error: 'Watch not found' });
-      return;
-    }
-    sendJson(res, 200, watch);
-    return;
-  }
-
-  if (method === 'PATCH' && pathname.startsWith('/watches/')) {
-    const watchId = decodeURIComponent(pathname.slice('/watches/'.length));
-    const existing = await ctx.store.getWatch(watchId);
-    if (!existing || existing.userId !== user.userId) {
-      sendJson(res, 404, { error: 'Watch not found' });
-      return;
-    }
-    try {
-      const body = await readJsonBody(req);
-      const merged = coerceWatchDocument(
-        { ...existing, ...(isObject(body) ? body : {}), id: watchId },
-        existing.userId,
-        existing,
-      );
-      await ctx.store.upsertWatch(merged);
-      await bumpWatchesGeneration(ctx.store);
-      sendJson(res, 200, merged);
-      return;
-    } catch (error) {
-      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-  }
-
-  if (method === 'DELETE' && pathname.startsWith('/watches/')) {
-    const watchId = decodeURIComponent(pathname.slice('/watches/'.length));
-    const existing = await ctx.store.getWatch(watchId);
-    if (!existing || existing.userId !== user.userId) {
-      sendJson(res, 404, { error: 'Watch not found' });
-      return;
-    }
-    await ctx.store.deleteWatch(watchId);
-    await bumpWatchesGeneration(ctx.store);
-    sendJson(res, 200, { ok: true });
     return;
   }
 

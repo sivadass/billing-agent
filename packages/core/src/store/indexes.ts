@@ -12,8 +12,6 @@ export type IndexableCollection = {
 
 export type IndexableCollections = {
   users: IndexableCollection;
-  watches: IndexableCollection;
-  priceChecks: IndexableCollection;
   secrets: IndexableCollection;
 };
 
@@ -27,9 +25,6 @@ export async function ensureStoreIndexes(
   collections: IndexableCollections,
 ): Promise<void> {
   await collections.users.createIndex({ email: 1 }, { unique: true });
-  await collections.watches.createIndex({ userId: 1 });
-  await collections.priceChecks.createIndex({ watchId: 1 });
-  await collections.priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
   await collections.secrets.createIndex({ id: 1 }, { unique: true });
   await collections.secrets.createIndex(
     { userId: 1, jobId: 1, key: 1 },

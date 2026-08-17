@@ -27,7 +27,6 @@ class ConversationMemoryStore implements BillingStore {
     mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
     browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
     jobsGeneration: 0,
-    watchesGeneration: 0,
   };
 
   jobs = new Map<string, JobDocument>();
@@ -101,26 +100,6 @@ class ConversationMemoryStore implements BillingStore {
       conversations = conversations.filter((c) => allowed.includes(c.status));
     }
     return conversations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-
-  async listWatches() {
-    return [];
-  }
-
-  async getWatch() {
-    return null;
-  }
-
-  async upsertWatch(): Promise<void> {}
-
-  async deleteWatch(): Promise<void> {}
-
-  async createPriceCheck(): Promise<void> {}
-
-  async finishPriceCheck(): Promise<void> {}
-
-  async listPriceChecks() {
-    return [];
   }
 
   async listActiveOverlays() {

@@ -18,15 +18,11 @@ import { LoginPage } from './pages/login-page';
 import { RunDetailPage } from './pages/run-detail-page';
 import { RunsPage } from './pages/runs-page';
 import { StatusPage } from './pages/status-page';
-import { WatchDetailPage } from './pages/watch-detail-page';
-import { WatchFormPage } from './pages/watch-form-page';
-import { WatchesPage } from './pages/watches-page';
 import styles from './app.module.scss';
 
 const MENU: Array<{ label: string; value: string; icon: any }> = [
   { label: 'Jobs', value: '/jobs', icon: 'work' },
   { label: 'Chat', value: '/chat', icon: 'forum' },
-  { label: 'Price watches', value: '/watches', icon: 'sell' },
   { label: 'Runs', value: '/runs', icon: 'history' },
   { label: 'Status', value: '/status', icon: 'monitor_heart' },
 ];
@@ -44,10 +40,6 @@ export function App() {
             <Route path="/jobs/:jobId" element={<JobFormPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/chat/:conversationId" element={<ChatPage />} />
-            <Route path="/watches" element={<WatchesPage />} />
-            <Route path="/watches/new" element={<WatchFormPage />} />
-            <Route path="/watches/:watchId/edit" element={<WatchFormPage />} />
-            <Route path="/watches/:watchId" element={<WatchDetailPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:runId" element={<RunDetailPage />} />
             <Route path="/status" element={<StatusPage />} />

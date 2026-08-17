@@ -551,8 +551,8 @@ Shippable when: no `/watches` routes or Price watches nav; `packages/price-monit
 - Modify: `README.md`, `watches.example.json` (delete or replace with workflow job example)
 - Extend migrate to `drop` leftover collections after copy (guard: only if no watch remains unmigrated)
 
-- [ ] `npm run test` and `npm run build` green.
-- [ ] Grep the repo for `price-monitor`, `WatchDocument`, `/watches` — zero production references.
+- [x] `npm run test` and `npm run build` green.
+- [x] Grep the repo for `price-monitor`, `WatchDocument`, `/watches` — zero production references.
 
 **In scope to delete:** watch package, watch UI/API/CLI/crons, `watches.example.json`, leftover watch collections after migrate.
 

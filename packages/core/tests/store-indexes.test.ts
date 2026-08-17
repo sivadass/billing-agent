@@ -11,8 +11,6 @@ type RecordedIndex = { keys: IndexKeys; options?: IndexOptions };
 function recordingCollections() {
   const created: Record<string, RecordedIndex[]> = {
     users: [],
-    watches: [],
-    priceChecks: [],
     secrets: [],
   };
   const collection = (name: string) => ({
@@ -25,26 +23,19 @@ function recordingCollections() {
     created,
     collections: {
       users: collection('users'),
-      watches: collection('watches'),
-      priceChecks: collection('priceChecks'),
       secrets: collection('secrets'),
     },
   };
 }
 
 describe('ensureStoreIndexes', () => {
-  it('keeps the existing user, watch, and price check indexes', async () => {
+  it('creates the user email index', async () => {
     const { created, collections } = recordingCollections();
 
     await ensureStoreIndexes(collections);
 
     assert.deepEqual(created.users, [
       { keys: { email: 1 }, options: { unique: true } },
-    ]);
-    assert.deepEqual(created.watches, [{ keys: { userId: 1 } }]);
-    assert.deepEqual(created.priceChecks, [
-      { keys: { watchId: 1 } },
-      { keys: { watchId: 1, checkedAt: -1 } },
     ]);
   });
 

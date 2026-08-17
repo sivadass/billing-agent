@@ -75,26 +75,6 @@ class AuthoringMemoryStore implements BillingStore {
     return conversations;
   }
 
-  async listWatches() {
-    return [];
-  }
-
-  async getWatch() {
-    return null;
-  }
-
-  async upsertWatch(): Promise<void> {}
-
-  async deleteWatch(): Promise<void> {}
-
-  async createPriceCheck(): Promise<void> {}
-
-  async finishPriceCheck(): Promise<void> {}
-
-  async listPriceChecks() {
-    return [];
-  }
-
   async listActiveOverlays() {
     return [];
   }

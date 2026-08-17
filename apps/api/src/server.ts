@@ -9,7 +9,6 @@ export type StartServerInput = {
   store: BillingStore;
   corsOrigins?: string[];
   onRunJob?: (jobId: string) => Promise<string>;
-  onRunWatch?: (watchId: string) => Promise<string>;
   onAuthorConversation?: (conversationId: string) => Promise<void>;
   /** Source of `SECRETS_MASTER_KEY` for the job secrets routes. */
   env?: NodeJS.ProcessEnv;
@@ -33,7 +32,6 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
       jwtSecret: input.jwtSecret,
       store: input.store,
       onRunJob: input.onRunJob,
-      onRunWatch: input.onRunWatch,
       onAuthorConversation: input.onAuthorConversation,
       env: input.env ?? process.env,
       lock: input.lock,

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { Db } from 'mongodb';
 import { ConfigError } from './errors.js';
 import { encryptSecret, parseMasterKey } from './secrets.js';
 import { assertJobDocument } from './store/assert-job.js';
@@ -8,11 +9,10 @@ import type {
   BillingStore,
   ExtractField,
   JobDocument,
-  PriceCheckDocument,
+  PriceSource,
   RunDocument,
   SecretDocument,
   SettingsDocument,
-  WatchDocument,
 } from './store/types.js';
 import type { WorkflowStep } from './workflow/types.js';
 
@@ -20,7 +20,67 @@ export type MigrateGenericJobsResult = {
   jobsMigrated: number;
   watchesMigrated: number;
   runsMigrated: number;
+  legacyCollectionsDropped: boolean;
 };
+
+/** Legacy watch shape read from the pre-migration `watches` collection only. */
+export type LegacyWatch = {
+  id: string;
+  userId: string;
+  url: string;
+  title: string | null;
+  enabled: boolean;
+  schedule: string | null;
+  lastPrice: number | null;
+  lastCurrency: string | null;
+  lastSource: PriceSource | null;
+  lastCheckedAt: string | null;
+  createdAt: string;
+};
+
+/** Legacy price check shape read from the pre-migration `price_checks` collection only. */
+export type LegacyPriceCheck = {
+  id: string;
+  watchId: string;
+  userId: string;
+  status: 'running' | 'success' | 'failed';
+  price: number | null;
+  currency: string | null;
+  source: PriceSource | null;
+  previousPrice: number | null;
+  dropped: boolean | null;
+  error: string | null;
+  checkedAt: string;
+};
+
+export type LegacyMigrationSource = {
+  listWatches(): Promise<LegacyWatch[]>;
+  listPriceChecks(watchId: string): Promise<LegacyPriceCheck[]>;
+  dropCollections(): Promise<void>;
+};
+
+export function createMongoLegacyMigrationSource(db: Db): LegacyMigrationSource {
+  const watches = db.collection<LegacyWatch>('watches');
+  const priceChecks = db.collection<LegacyPriceCheck>('price_checks');
+  return {
+    async listWatches() {
+      return watches.find().toArray();
+    },
+    async listPriceChecks(watchId) {
+      return priceChecks.find({ watchId }).toArray();
+    },
+    async dropCollections() {
+      const existing = await db.listCollections().toArray();
+      const names = new Set(existing.map((collection) => collection.name));
+      if (names.has('watches')) {
+        await watches.drop();
+      }
+      if (names.has('price_checks')) {
+        await priceChecks.drop();
+      }
+    },
+  };
+}
 
 type LegacyBillingJobDoc = {
   id: string;
@@ -239,7 +299,7 @@ function watchWorkflowSteps(url: string): WorkflowStep[] {
 }
 
 function watchLastResult(
-  watch: WatchDocument,
+  watch: LegacyWatch,
 ): Record<string, string | number> | null {
   if (watch.lastPrice === null) return null;
   return {
@@ -248,7 +308,7 @@ function watchLastResult(
   };
 }
 
-function watchToWorkflowJob(watch: WatchDocument, ctx: MigrationContext): JobDocument {
+function watchToWorkflowJob(watch: LegacyWatch, ctx: MigrationContext): JobDocument {
   const name = watch.title ?? safeHostname(watch.url);
   return {
     id: watch.id,
@@ -273,7 +333,7 @@ function watchToWorkflowJob(watch: WatchDocument, ctx: MigrationContext): JobDoc
   };
 }
 
-function priceCheckToRun(check: PriceCheckDocument, jobId: string): RunDocument {
+function priceCheckToRun(check: LegacyPriceCheck, jobId: string): RunDocument {
   const running = check.status === 'running';
   const result: Record<string, unknown> | null =
     check.status === 'success'
@@ -302,6 +362,19 @@ function priceCheckToRun(check: PriceCheckDocument, jobId: string): RunDocument 
   };
 }
 
+async function allLegacyWatchesMigrated(
+  store: BillingStore,
+  legacy: LegacyMigrationSource,
+): Promise<boolean> {
+  for (const watch of await legacy.listWatches()) {
+    const existingJob = await store.getJob(watch.id);
+    if (!isMigratedJob(existingJob)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Idempotent Slice 1 migration (see docs/superpowers/specs/2026-08-16-generic-site-jobs-design.md#migration):
  *  - legacy billing jobs (`provider` present, no `engine`) → `engine: 'adapter'`
@@ -312,7 +385,8 @@ function priceCheckToRun(check: PriceCheckDocument, jobId: string): RunDocument 
  *  - settings: keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; drop the
  *    required `topicEnv` and `watchesGeneration`
  *
- * Never deletes `watches` or `price_checks` (Slice 5 only). Safe to run
+ * When `legacy` is provided and every watch has a corresponding migrated job,
+ * drops the leftover `watches` and `price_checks` collections. Safe to run
  * repeatedly: already-migrated jobs (raw doc already has `engine`), watches
  * with an existing workflow job, and price_checks with an existing run are
  * all skipped.
@@ -321,8 +395,9 @@ export async function migrateGenericJobs(input: {
   store: BillingStore;
   env: NodeJS.ProcessEnv;
   now?: Date;
+  legacy?: LegacyMigrationSource;
 }): Promise<MigrateGenericJobsResult> {
-  const { store, env } = input;
+  const { store, env, legacy } = input;
   const nowIso = (input.now ?? new Date()).toISOString();
 
   const settings = await store.getSettings();
@@ -352,18 +427,20 @@ export async function migrateGenericJobs(input: {
 
   let watchesMigrated = 0;
   let runsMigrated = 0;
-  for (const watch of await store.listWatches()) {
-    const existingJob = await store.getJob(watch.id);
-    if (!isMigratedJob(existingJob)) {
-      await store.upsertJob(watchToWorkflowJob(watch, ctx));
-      watchesMigrated += 1;
-    }
+  if (legacy) {
+    for (const watch of await legacy.listWatches()) {
+      const existingJob = await store.getJob(watch.id);
+      if (!isMigratedJob(existingJob)) {
+        await store.upsertJob(watchToWorkflowJob(watch, ctx));
+        watchesMigrated += 1;
+      }
 
-    for (const check of await store.listPriceChecks({ watchId: watch.id })) {
-      const existingRun = await store.getRun(check.id);
-      if (existingRun) continue;
-      await store.createRun(priceCheckToRun(check, watch.id));
-      runsMigrated += 1;
+      for (const check of await legacy.listPriceChecks(watch.id)) {
+        const existingRun = await store.getRun(check.id);
+        if (existingRun) continue;
+        await store.createRun(priceCheckToRun(check, watch.id));
+        runsMigrated += 1;
+      }
     }
   }
 
@@ -378,5 +455,11 @@ export async function migrateGenericJobs(input: {
     jobsGeneration: settings.jobsGeneration,
   });
 
-  return { jobsMigrated, watchesMigrated, runsMigrated };
+  let legacyCollectionsDropped = false;
+  if (legacy && (await allLegacyWatchesMigrated(store, legacy))) {
+    await legacy.dropCollections();
+    legacyCollectionsDropped = true;
+  }
+
+  return { jobsMigrated, watchesMigrated, runsMigrated, legacyCollectionsDropped };
 }

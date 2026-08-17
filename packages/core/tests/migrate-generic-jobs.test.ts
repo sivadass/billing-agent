@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ConfigError } from '../src/errors.ts';
 import { migrateGenericJobs } from '../src/migrate-generic-jobs.ts';
+import type {
+  LegacyMigrationSource,
+  LegacyPriceCheck,
+  LegacyWatch,
+} from '../src/migrate-generic-jobs.ts';
 import { decryptSecret, parseMasterKey } from '../src/secrets.ts';
 import { createBillingStoreFromCollections } from '../src/store/mongo.ts';
 import type {
@@ -9,12 +14,10 @@ import type {
   JobDocument,
   OverlayDocument,
   OverlaySuccessInput,
-  PriceCheckDocument,
   RunDocument,
   SecretDocument,
   SettingsDocument,
   UserDocument,
-  WatchDocument,
 } from '../src/store/types.ts';
 
 const TEST_MASTER_KEY_HEX =
@@ -38,7 +41,29 @@ function defaultSettings(): SettingsDocument {
       saveErrorScreenshot: true,
     },
     jobsGeneration: 0,
-    watchesGeneration: 0,
+  };
+}
+
+function createMemoryLegacySource(
+  watches: LegacyWatch[],
+  priceChecks: LegacyPriceCheck[],
+): { legacy: LegacyMigrationSource; dropped: () => boolean } {
+  let collectionsDropped = false;
+  return {
+    legacy: {
+      async listWatches() {
+        return [...watches];
+      },
+      async listPriceChecks(watchId) {
+        return priceChecks.filter((check) => check.watchId === watchId);
+      },
+      async dropCollections() {
+        watches.length = 0;
+        priceChecks.length = 0;
+        collectionsDropped = true;
+      },
+    },
+    dropped: () => collectionsDropped,
   };
 }
 
@@ -52,12 +77,8 @@ function defaultSettings(): SettingsDocument {
 class FakeBillingStore implements BillingStore {
   jobs: Record<string, unknown>[] = [];
   secrets: SecretDocument[] = [];
-  watches: WatchDocument[] = [];
-  priceChecks: PriceCheckDocument[] = [];
   runs: RunDocument[] = [];
   settings: SettingsDocument;
-  deletedWatchIds: string[] = [];
-  deletedPriceCheckWatchIds: string[] = [];
 
   constructor(settings: SettingsDocument = defaultSettings()) {
     this.settings = settings;
@@ -127,56 +148,6 @@ class FakeBillingStore implements BillingStore {
 
   async listConversations(): Promise<[]> {
     return [];
-  }
-
-  async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {
-    return options?.userId
-      ? this.watches.filter((watch) => watch.userId === options.userId)
-      : this.watches;
-  }
-
-  async getWatch(id: string): Promise<WatchDocument | null> {
-    return this.watches.find((watch) => watch.id === id) ?? null;
-  }
-
-  async upsertWatch(watch: WatchDocument): Promise<void> {
-    const index = this.watches.findIndex((existing) => existing.id === watch.id);
-    if (index >= 0) {
-      this.watches[index] = watch;
-    } else {
-      this.watches.push(watch);
-    }
-  }
-
-  async deleteWatch(id: string): Promise<void> {
-    this.deletedWatchIds.push(id);
-    this.deletedPriceCheckWatchIds.push(id);
-    this.watches = this.watches.filter((watch) => watch.id !== id);
-    this.priceChecks = this.priceChecks.filter((check) => check.watchId !== id);
-  }
-
-  async createPriceCheck(check: PriceCheckDocument): Promise<void> {
-    this.priceChecks.push(check);
-  }
-
-  async finishPriceCheck(
-    id: string,
-    update: Partial<PriceCheckDocument>,
-  ): Promise<void> {
-    const check = this.priceChecks.find((existing) => existing.id === id);
-    if (check) Object.assign(check, update);
-  }
-
-  async listPriceChecks(options: {
-    watchId: string;
-    userId?: string;
-    limit?: number;
-  }): Promise<PriceCheckDocument[]> {
-    return this.priceChecks.filter(
-      (check) =>
-        check.watchId === options.watchId &&
-        (options.userId === undefined || check.userId === options.userId),
-    );
   }
 
   async listActiveOverlays(): Promise<OverlayDocument[]> {
@@ -250,7 +221,7 @@ function legacyDummyJob(): Record<string, unknown> {
   };
 }
 
-function legacyWatch(): WatchDocument {
+function legacyWatch(): LegacyWatch {
   return {
     id: 'craft-glory-old-skool-vb',
     userId: 'user-1',
@@ -266,7 +237,7 @@ function legacyWatch(): WatchDocument {
   };
 }
 
-function legacyPriceCheck(): PriceCheckDocument {
+function legacyPriceCheck(): LegacyPriceCheck {
   return {
     id: 'check-1',
     watchId: 'craft-glory-old-skool-vb',
@@ -445,9 +416,9 @@ describe('migrateGenericJobs', () => {
 
   it('migrates a legacy watch into a deterministic workflow job', async () => {
     const store = new FakeBillingStore();
-    store.watches.push(legacyWatch());
+    const { legacy } = createMemoryLegacySource([legacyWatch()], []);
 
-    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW, legacy });
 
     assert.equal(result.watchesMigrated, 1);
     const job = await store.getJob('craft-glory-old-skool-vb');
@@ -477,8 +448,8 @@ describe('migrateGenericJobs', () => {
 
     // Deterministic: migrating the same watch again produces the identical workflow shape.
     const store2 = new FakeBillingStore();
-    store2.watches.push(legacyWatch());
-    await migrateGenericJobs({ store: store2, env: baseEnv(), now: NOW });
+    const { legacy: legacy2 } = createMemoryLegacySource([legacyWatch()], []);
+    await migrateGenericJobs({ store: store2, env: baseEnv(), now: NOW, legacy: legacy2 });
     const job2 = await store2.getJob('craft-glory-old-skool-vb');
     assert.deepEqual(job2?.workflow, job?.workflow);
   });
@@ -486,9 +457,9 @@ describe('migrateGenericJobs', () => {
   it('derives a job name from hostname when a watch has no title', async () => {
     const store = new FakeBillingStore();
     const watch = { ...legacyWatch(), title: null };
-    store.watches.push(watch);
+    const { legacy } = createMemoryLegacySource([watch], []);
 
-    await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+    await migrateGenericJobs({ store, env: baseEnv(), now: NOW, legacy });
 
     const job = await store.getJob(watch.id);
     assert.equal(job?.name, 'craftandglory.in');
@@ -496,10 +467,12 @@ describe('migrateGenericJobs', () => {
 
   it('copies a price_check into a generic run', async () => {
     const store = new FakeBillingStore();
-    store.watches.push(legacyWatch());
-    store.priceChecks.push(legacyPriceCheck());
+    const { legacy } = createMemoryLegacySource(
+      [legacyWatch()],
+      [legacyPriceCheck()],
+    );
 
-    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW, legacy });
 
     assert.equal(result.runsMigrated, 1);
     const run = await store.getRun('check-1');
@@ -518,17 +491,21 @@ describe('migrateGenericJobs', () => {
 
   it('copies a failed price_check into a failed run with an error', async () => {
     const store = new FakeBillingStore();
-    store.watches.push(legacyWatch());
-    store.priceChecks.push({
-      ...legacyPriceCheck(),
-      id: 'check-2',
-      status: 'failed',
-      price: null,
-      currency: null,
-      error: 'ScrapeError: could not find price',
-    });
+    const { legacy } = createMemoryLegacySource(
+      [legacyWatch()],
+      [
+        {
+          ...legacyPriceCheck(),
+          id: 'check-2',
+          status: 'failed',
+          price: null,
+          currency: null,
+          error: 'ScrapeError: could not find price',
+        },
+      ],
+    );
 
-    await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+    await migrateGenericJobs({ store, env: baseEnv(), now: NOW, legacy });
 
     const run = await store.getRun('check-2');
     assert.ok(run);
@@ -622,19 +599,31 @@ describe('migrateGenericJobs', () => {
   it('is idempotent across repeated runs: no duplicate jobs, secrets, or runs', async () => {
     const store = new FakeBillingStore();
     store.jobs.push(legacyTnpdclJob());
-    store.watches.push(legacyWatch());
-    store.priceChecks.push(legacyPriceCheck());
+    const watches = [legacyWatch()];
+    const priceChecks = [legacyPriceCheck()];
+    const { legacy } = createMemoryLegacySource(watches, priceChecks);
     const env = baseEnv();
 
-    const first = await migrateGenericJobs({ store, env, now: NOW });
-    assert.deepEqual(first, { jobsMigrated: 1, watchesMigrated: 1, runsMigrated: 1 });
+    const first = await migrateGenericJobs({ store, env, now: NOW, legacy });
+    assert.deepEqual(first, {
+      jobsMigrated: 1,
+      watchesMigrated: 1,
+      runsMigrated: 1,
+      legacyCollectionsDropped: true,
+    });
 
     const second = await migrateGenericJobs({
       store,
       env,
       now: new Date('2026-08-17T00:00:00.000Z'),
+      legacy,
     });
-    assert.deepEqual(second, { jobsMigrated: 0, watchesMigrated: 0, runsMigrated: 0 });
+    assert.deepEqual(second, {
+      jobsMigrated: 0,
+      watchesMigrated: 0,
+      runsMigrated: 0,
+      legacyCollectionsDropped: true,
+    });
 
     assert.equal(store.jobs.length, 2);
     assert.equal(store.runs.length, 1);
@@ -642,14 +631,13 @@ describe('migrateGenericJobs', () => {
     assert.equal(secrets.length, 2);
   });
 
-  it('maps settings: keeps ntfy baseUrl/priority + jobsGeneration, drops topicEnv and watchesGeneration', async () => {
+  it('maps settings: keeps ntfy baseUrl/priority + jobsGeneration, drops topicEnv', async () => {
     const store = new FakeBillingStore({
       id: 'default',
       ntfy: { baseUrl: 'https://ntfy.example', topicEnv: 'NTFY_TOPIC', priority: 'high' },
       mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
       browser: { headless: true, timeoutMs: 30_000, saveErrorScreenshot: false },
       jobsGeneration: 3,
-      watchesGeneration: 7,
     });
 
     await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
@@ -660,7 +648,6 @@ describe('migrateGenericJobs', () => {
     assert.equal(settings.ntfy.defaultTopic, 'resolved-topic');
     assert.equal(settings.ntfy.topicEnv, undefined);
     assert.equal(settings.jobsGeneration, 3);
-    assert.equal(settings.watchesGeneration, undefined);
     assert.deepEqual(settings.mistral, {
       apiKeyEnv: 'MISTRAL_API_KEY',
       model: 'mistral-small-latest',
@@ -672,21 +659,26 @@ describe('migrateGenericJobs', () => {
     });
   });
 
-  it('does not delete watch or price_check collections in Slice 1', async () => {
+  it('drops legacy collections when all watches are migrated', async () => {
     const store = new FakeBillingStore();
-    store.watches.push(legacyWatch());
-    store.priceChecks.push(legacyPriceCheck());
+    const watches = [legacyWatch()];
+    const priceChecks = [legacyPriceCheck()];
+    const { legacy, dropped } = createMemoryLegacySource(watches, priceChecks);
 
-    await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW, legacy });
 
-    assert.equal(store.watches.length, 1);
-    assert.equal(store.priceChecks.length, 1);
-    assert.deepEqual(store.deletedWatchIds, []);
-    assert.ok(await store.getWatch('craft-glory-old-skool-vb'));
-    assert.equal(
-      (await store.listPriceChecks({ watchId: 'craft-glory-old-skool-vb' })).length,
-      1,
-    );
+    assert.equal(result.legacyCollectionsDropped, true);
+    assert.equal(watches.length, 0);
+    assert.equal(priceChecks.length, 0);
+    assert.equal(dropped(), true);
+  });
+
+  it('does not drop legacy collections when legacy source is omitted', async () => {
+    const store = new FakeBillingStore();
+
+    const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
+
+    assert.equal(result.legacyCollectionsDropped, false);
   });
 });
 
@@ -766,8 +758,7 @@ function buildMongoLikeStore(): {
       overlays: new MemoryCollection<OverlayDocument>(),
       runs: new MemoryCollection<Record<string, unknown>>(),
       secrets: new MemoryCollection<SecretDocument>(),
-      watches: new MemoryCollection<WatchDocument>(),
-      priceChecks: new MemoryCollection<PriceCheckDocument>(),
+      conversations: new MemoryCollection(),
       users: new MemoryCollection<UserDocument>(),
     },
     async () => {},
@@ -802,7 +793,12 @@ describe('migrateGenericJobs against a real createBillingStoreFromCollections st
     );
 
     const first = await migrateGenericJobs({ store, env, now: NOW });
-    assert.deepEqual(first, { jobsMigrated: 1, watchesMigrated: 0, runsMigrated: 0 });
+    assert.deepEqual(first, {
+      jobsMigrated: 1,
+      watchesMigrated: 0,
+      runsMigrated: 0,
+      legacyCollectionsDropped: false,
+    });
 
     // The underlying raw document was actually rewritten (not just coerced on read).
     const rawAfter = await jobsCollection.findOne({ id: 'home-eb' });
@@ -827,7 +823,12 @@ describe('migrateGenericJobs against a real createBillingStoreFromCollections st
     assert.equal(readBack?.startUrl, 'https://www.tnebnet.org/awp/login');
 
     const second = await migrateGenericJobs({ store, env, now: NOW });
-    assert.deepEqual(second, { jobsMigrated: 0, watchesMigrated: 0, runsMigrated: 0 });
+    assert.deepEqual(second, {
+      jobsMigrated: 0,
+      watchesMigrated: 0,
+      runsMigrated: 0,
+      legacyCollectionsDropped: false,
+    });
     assert.equal(
       (await store.listSecrets({ userId: 'user-1', jobId: 'home-eb' })).length,
       2,
@@ -873,7 +874,12 @@ describe('migrateGenericJobs against a real createBillingStoreFromCollections st
 
     const result = await migrateGenericJobs({ store, env: baseEnv(), now: NOW });
 
-    assert.deepEqual(result, { jobsMigrated: 0, watchesMigrated: 0, runsMigrated: 0 });
+    assert.deepEqual(result, {
+      jobsMigrated: 0,
+      watchesMigrated: 0,
+      runsMigrated: 0,
+      legacyCollectionsDropped: false,
+    });
     assert.deepEqual(await store.getJob('sivadass-in-email'), valid);
   });
 });
