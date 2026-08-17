@@ -421,10 +421,10 @@ export function createBrowserLock(): {
 
 `runJob` for `engine === 'workflow'` calls `runWorkflow` instead of `getAdapter`.
 
-- [ ] Test: second `tryAcquire` returns false; `release` then succeeds.
-- [ ] Dummy **adapter** job in job-runner test still writes `result.amount` (engine path).
-- [ ] Workflow job-runner test: `sivadass-in-email` extracts `contact@sivadass.in`.
-- [ ] `npm run test` (core, api, worker).
+- [x] Test: second `tryAcquire` returns false; `release` then succeeds.
+- [x] Dummy **adapter** job in job-runner test still writes `result.amount` (engine path).
+- [x] Workflow job-runner test: `sivadass-in-email` extracts `contact@sivadass.in`.
+- [x] `npm run test` (core, api, worker).
 
 **Slice 2 exit:** `jobs.example.json` includes job `sivadass-in-email` (`startUrl: https://sivadass.in/`, schema email); webhook notify unit-tested.
 
