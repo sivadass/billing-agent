@@ -31,6 +31,20 @@ describe('proposeOverlayPatch', () => {
     assert.deepEqual(overlay, { username: '#userName' });
   });
 
+  it('accepts workflow field overlay keys', async () => {
+    const overlay = await proposeOverlayPatch(
+      {
+        errorMessage: 'extract failed',
+        compactDom: '<span id="amount">123</span>',
+        allowedKeys: ['field:amount'],
+      },
+      {
+        completeJson: async () => JSON.stringify({ 'field:amount': '#amount' }),
+      },
+    );
+    assert.deepEqual(overlay, { 'field:amount': '#amount' });
+  });
+
   it('throws ConfigError on invalid JSON payloads', async () => {
     await assert.rejects(
       () =>

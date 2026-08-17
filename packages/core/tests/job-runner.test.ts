@@ -7,7 +7,7 @@ import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
 import { registerBuiltInAdapters } from '../src/adapters/registry.ts';
 import { createBrowserLock, type BrowserLockOwner } from '../src/browser-lock.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
-import { ConfigError, LoginError } from '../src/errors.ts';
+import { ConfigError, LoginError, ScrapeError, CaptchaError } from '../src/errors.ts';
 import { encryptSecret } from '../src/secrets.ts';
 import type { BillingStore, JobDocument, RunDocument, SecretDocument } from '../src/store/types.ts';
 import { billResultToRecord, runJob, runJobs } from '../src/job-runner.ts';
@@ -1006,8 +1006,9 @@ describe('runJob — engine switch', () => {
         store,
         withBrowser: async (_config, callback) => callback({} as Page),
         runWorkflow: async () => {
-          throw new LoginError('nothing extracted');
+          throw new ScrapeError('nothing extracted');
         },
+        proposeOverlayPatch: async () => ({ 'field:email': '#still-missing' }),
         sendNtfy: async () => {},
         dispatchNotify: async () => {},
       },
@@ -1015,7 +1016,114 @@ describe('runJob — engine switch', () => {
 
     assert.equal(result.ok, false);
     assert.equal(runUpdates.at(-1)?.status, 'failed');
-    assert.equal(runUpdates.at(-1)?.errorCode, 'LoginError');
+    assert.equal(runUpdates.at(-1)?.errorCode, 'ScrapeError');
+    assert.equal(runUpdates.at(-1)?.recoveryAttempted, true);
+    assert.equal(runUpdates.at(-1)?.recoverySucceeded, false);
+  });
+
+  it('recovers a failed workflow extract with a field overlay patch', async () => {
+    const workflowJob: JobConfig = {
+      ...sivadassJob,
+      schema: [{ key: 'amount', label: 'Amount', type: 'price' }],
+      workflow: [
+        { id: 'goto-home', type: 'goto', url: 'https://example.test/' },
+        {
+          id: 'extract-amount',
+          type: 'extract',
+          fields: [{ key: 'amount', selector: '#wrong', strategy: 'text' }],
+        },
+      ],
+    };
+
+    let runWorkflowCalls = 0;
+    let recordedPatch: Record<string, string> | undefined;
+    const { store, runUpdates } = recordingStore();
+
+    const result = await runJob(liveApp, workflowJob, {
+      env: testEnv,
+      store: {
+        ...store,
+        recordOverlaySuccess: async (input) => {
+          recordedPatch = input.patch as Record<string, string>;
+          return {
+            provider: input.provider,
+            jobId: input.jobId,
+            fingerprint: input.fingerprint,
+            patch: input.patch,
+            successCount: 1,
+            status: 'candidate',
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      },
+      withBrowser: async (_config, callback) =>
+        callback({
+          url: () => 'https://example.test/',
+          title: async () => 'Example',
+          screenshot: async () => Buffer.alloc(0),
+        } as unknown as Page),
+      extractCompactDom: async () => '<span id="amount">123</span>',
+      proposeOverlayPatch: async ({ allowedKeys }) => {
+        assert.ok(allowedKeys.includes('field:amount'));
+        return { 'field:amount': '#new' };
+      },
+      runWorkflow: async (input) => {
+        runWorkflowCalls += 1;
+        if (runWorkflowCalls === 1) {
+          throw new ScrapeError('extract failed');
+        }
+        const extractStep = input.steps.find((step) => step.id === 'extract-amount');
+        assert.ok(extractStep?.type === 'extract');
+        assert.equal(extractStep.fields[0]?.selector, '#new');
+        return { amount: '123' };
+      },
+      sendNtfy: async () => {},
+      dispatchNotify: async () => {},
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(runWorkflowCalls, 2);
+    assert.deepEqual(recordedPatch, { 'field:amount': '#new' });
+    assert.equal(runUpdates.at(-1)?.recoveryAttempted, true);
+    assert.equal(runUpdates.at(-1)?.recoverySucceeded, true);
+  });
+
+  it('does not recover workflow CaptchaError failures', async () => {
+    let recoveryCalls = 0;
+    const workflowJob: JobConfig = {
+      ...sivadassJob,
+      workflow: [
+        { id: 'goto-home', type: 'goto', url: 'https://example.test/' },
+        {
+          id: 'solve-cap',
+          type: 'solve_captcha',
+          imageSelector: '#img',
+          inputSelector: '#in',
+        },
+      ],
+      schema: [],
+    };
+    const { store, runUpdates } = recordingStore();
+
+    const result = await runJob(liveApp, workflowJob, {
+      env: testEnv,
+      store,
+      withBrowser: async (_config, callback) => callback({} as Page),
+      proposeOverlayPatch: async () => {
+        recoveryCalls += 1;
+        return { 'field:email': '#x' };
+      },
+      runWorkflow: async () => {
+        throw new CaptchaError('captcha failed');
+      },
+      sendNtfy: async () => {},
+      dispatchNotify: async () => {},
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(recoveryCalls, 0);
+    assert.equal(runUpdates.at(-1)?.recoveryAttempted, false);
+    assert.equal(runUpdates.at(-1)?.errorCode, 'CaptchaError');
   });
 });
 

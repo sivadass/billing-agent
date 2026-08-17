@@ -28,7 +28,13 @@ import {
   sendNtfy,
 } from './notify.js';
 import { decideNotify } from './compare.js';
-import { tnpdclOverlayKeys, fingerprintFailure } from './overlay.js';
+import {
+  allowedOverlayKeys,
+  applyWorkflowOverlay,
+  fingerprintFailure,
+  overlayProviderForJob,
+  type SelectorOverlay,
+} from './overlay.js';
 import {
   extractCompactDom,
   proposeOverlayPatch as proposeOverlayPatchWithDeps,
@@ -389,12 +395,25 @@ async function executeJob(
       const captchaSolver = createLazyCaptchaSolver(runnerDeps, app.mistral);
 
       if (job.engine === 'workflow') {
-        try {
-          // Deterministic replay only: the interpreter's sole LLM seam is the
-          // captcha solver, and the strategies are the default DOM/JSON ones.
-          const record = await runnerDeps.runWorkflow({
+        const provider = overlayProviderForJob(job);
+        const allowedKeys = [...allowedOverlayKeys(job)];
+        const activeOverlay = runnerDeps.store
+          ? (
+              await runnerDeps.store.listActiveOverlays({
+                provider,
+                jobId: job.id,
+              })
+            )[0]?.patch
+          : undefined;
+
+        const runWorkflowOnce = async (recoveryPatch?: SelectorOverlay) => {
+          const overlay = recoveryPatch
+            ? { ...(activeOverlay ?? {}), ...recoveryPatch }
+            : activeOverlay;
+          const steps = applyWorkflowOverlay(job.workflow, overlay);
+          return runnerDeps.runWorkflow({
             page,
-            steps: job.workflow,
+            steps,
             secrets,
             captchaSolver,
             timeoutMs: app.browser.timeoutMs,
@@ -402,13 +421,60 @@ async function executeJob(
             logger,
             extractStrategies: defaultExtractStrategies,
           });
+        };
+
+        try {
+          const record = await runWorkflowOnce();
           return { result: record, record };
         } catch (cause) {
-          // Workflow selector recovery arrives with the generalized overlay
-          // keys (slice 4); for now a failed step is simply a failed run.
           const screenshot = await captureScreenshot(app, job, logger, page);
           screenshotPath = screenshot.path;
-          throw toAppError(cause);
+          screenshotBase64 = screenshot.base64;
+          const error = toAppError(cause);
+          if (!runnerDeps.store || !isRecoverableError(error)) {
+            throw error;
+          }
+
+          recoveryAttempted = true;
+          let urlPath: string | undefined;
+          try {
+            urlPath = new URL(page.url()).pathname;
+          } catch {
+            urlPath = undefined;
+          }
+
+          let title: string | undefined;
+          try {
+            title = await page.title();
+          } catch {
+            title = undefined;
+          }
+
+          const fingerprint = fingerprintFailure({
+            code: error.code,
+            urlPath,
+            title,
+          });
+
+          const compactDom = await runnerDeps.extractCompactDom(page);
+          const patch = await proposePatch({
+            errorMessage: error.message,
+            screenshotBase64,
+            compactDom,
+            allowedKeys,
+          });
+
+          const record = await runWorkflowOnce(patch);
+          const overlay = await runnerDeps.store.recordOverlaySuccess({
+            provider,
+            jobId: job.id,
+            fingerprint,
+            patch,
+          });
+          recoverySucceeded = true;
+          overlayActivated =
+            overlay.status === 'active' && overlay.successCount >= 3;
+          return { result: record, record };
         }
       }
 
@@ -481,7 +547,7 @@ async function executeJob(
           errorMessage: error.message,
           screenshotBase64,
           compactDom,
-          allowedKeys: tnpdclOverlayKeys,
+          allowedKeys: [...allowedOverlayKeys(job)],
         });
 
         const retryResult = await runAdapter(patch);

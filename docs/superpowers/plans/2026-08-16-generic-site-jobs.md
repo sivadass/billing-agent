@@ -508,7 +508,7 @@ UI:
 - `awaiting_secret`: password inputs
 - `confirming`: sample table + Confirm / Keep going
 
-- [ ] `npm run test -w @billing-agent/web`
+- [x] `npm run test -w @billing-agent/web`
 - [ ] Manual: chat `https://sivadass.in/` → confirm email `contact@sivadass.in` (document in `docs/local-testing-sign-off-guide.md`)
 
 **Slice 3 exit:** confirming chat creates a job; Run now uses interpreter only.
@@ -530,8 +530,8 @@ Key format: `step:<stepId>.selector`, `step:<stepId>.imageSelector`, `field:<key
 
 Interpreter applies overlay: if patch has `step:abc.selector`, replace that step’s selector before run.
 
-- [ ] Test: failed extract → mocked proposer returns `{ 'field:amount': '#new' }` → retry succeeds → `recordOverlaySuccess`.
-- [ ] Captcha errors still not recovered.
+- [x] Test: failed extract → mocked proposer returns `{ 'field:amount': '#new' }` → retry succeeds → `recordOverlaySuccess`.
+- [x] Captcha errors still not recovered.
 
 ---
 
