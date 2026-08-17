@@ -20,6 +20,7 @@ import {
 } from '@billing-agent/core';
 import { isWatchLocked } from '@billing-agent/price-monitor';
 import { requireJwtAuth } from './auth.js';
+import { handleConversationRoutes } from './conversation-routes.js';
 import { signAccessToken } from './jwt.js';
 
 export type RouteContext = {
@@ -27,6 +28,7 @@ export type RouteContext = {
   store: BillingStore;
   onRunJob?: (jobId: string) => Promise<string>;
   onRunWatch?: (watchId: string) => Promise<string>;
+  onAuthorConversation?: (conversationId: string) => Promise<void>;
   authUser?: { id: string; email: string };
   env?: NodeJS.ProcessEnv;
   /**
@@ -531,6 +533,18 @@ export async function handleRoute(
 
   const user = await requireJwtAuth(req, res, ctx.jwtSecret);
   if (!user) {
+    return;
+  }
+
+  const conversationHandled = await handleConversationRoutes(
+    req,
+    res,
+    ctx,
+    user.userId,
+    pathname,
+    method,
+  );
+  if (conversationHandled) {
     return;
   }
 

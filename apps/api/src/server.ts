@@ -10,6 +10,7 @@ export type StartServerInput = {
   corsOrigins?: string[];
   onRunJob?: (jobId: string) => Promise<string>;
   onRunWatch?: (watchId: string) => Promise<string>;
+  onAuthorConversation?: (conversationId: string) => Promise<void>;
   /** Source of `SECRETS_MASTER_KEY` for the job secrets routes. */
   env?: NodeJS.ProcessEnv;
   /** Shared with the worker's runner and scheduler so Run now can answer 409 while the browser is in use. */
@@ -33,6 +34,7 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
       store: input.store,
       onRunJob: input.onRunJob,
       onRunWatch: input.onRunWatch,
+      onAuthorConversation: input.onAuthorConversation,
       env: input.env ?? process.env,
       lock: input.lock,
     }).catch(

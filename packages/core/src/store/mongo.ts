@@ -4,6 +4,7 @@ import { assertJobDocument } from './assert-job.js';
 import { ensureStoreIndexes } from './indexes.js';
 import type {
   BillingStore,
+  ConversationDocument,
   JobDocument,
   OverlayDocument,
   OverlaySuccessInput,
@@ -44,6 +45,7 @@ type StoreCollections = {
   overlays: CollectionLike<OverlayDocument>;
   runs: CollectionLike<Record<string, unknown>>;
   secrets: CollectionLike<SecretDocument>;
+  conversations: CollectionLike<ConversationDocument>;
   watches: CollectionLike<WatchDocument>;
   priceChecks: CollectionLike<PriceCheckDocument>;
   users: CollectionLike<UserDocument>;
@@ -252,6 +254,18 @@ export function createBillingStoreFromCollections(
       await collections.secrets.deleteMany({ jobId });
     },
 
+    async upsertConversation(conversation) {
+      await collections.conversations.updateOne(
+        { id: conversation.id },
+        { $set: conversation },
+        { upsert: true },
+      );
+    },
+
+    async getConversation(id) {
+      return collections.conversations.findOne({ id });
+    },
+
     async listWatches(options) {
       const watches = await collections.watches
         .find(options?.userId ? { userId: options.userId } : {})
@@ -428,6 +442,7 @@ export async function connectStore(uri: string): Promise<BillingStore> {
       overlays: db.collection<OverlayDocument>('learned_overlays'),
       runs: db.collection('runs') as unknown as CollectionLike<Record<string, unknown>>,
       secrets,
+      conversations: db.collection<ConversationDocument>('conversations'),
       watches,
       priceChecks,
       users,

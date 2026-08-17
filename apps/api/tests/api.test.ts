@@ -10,6 +10,7 @@ import {
 import type {
   BillingStore,
   BrowserLock,
+  ConversationDocument,
   JobDocument,
   PriceCheckDocument,
   RunDocument,
@@ -35,6 +36,7 @@ class MemoryStore implements BillingStore {
   };
 
   jobs = new Map<string, JobDocument>();
+  conversations = new Map<string, ConversationDocument>();
   watches = new Map<string, WatchDocument>();
   priceChecks = new Map<string, PriceCheckDocument>();
   runs = new Map<string, RunDocument>();
@@ -94,6 +96,14 @@ class MemoryStore implements BillingStore {
         this.secrets.delete(id);
       }
     }
+  }
+
+  async upsertConversation(conversation: ConversationDocument): Promise<void> {
+    this.conversations.set(conversation.id, conversation);
+  }
+
+  async getConversation(id: string): Promise<ConversationDocument | null> {
+    return this.conversations.get(id) ?? null;
   }
 
   async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {

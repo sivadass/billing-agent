@@ -85,6 +85,40 @@ export type OverlayDocument = {
   updatedAt: string;
 };
 
+export type ConversationStatus =
+  | 'active'
+  | 'awaiting_secret'
+  | 'confirming'
+  | 'saved'
+  | 'abandoned'
+  | 'expired';
+
+export type ConversationMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  screenshotPath?: string;
+  createdAt: string;
+};
+
+export type ConversationDocument = {
+  id: string;
+  userId: string;
+  status: ConversationStatus;
+  jobId: string | null;
+  startUrl: string | null;
+  goal: string | null;
+  messages: ConversationMessage[];
+  draftWorkflow: WorkflowStep[] | null;
+  draftSchema: ExtractField[] | null;
+  draftExtract: Record<string, string | number> | null;
+  draftNotify: JobDocument['notify'] | null;
+  /** Optional schedule from POST /conversations; applied when the job is saved. */
+  draftSchedule: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type RunDocument = {
   id: string;
   jobId: string;
@@ -176,6 +210,8 @@ export interface BillingStore {
     conversationId?: string;
   }): Promise<SecretDocument[]>;
   deleteSecretsForJob(jobId: string): Promise<void>;
+  upsertConversation(conversation: ConversationDocument): Promise<void>;
+  getConversation(id: string): Promise<ConversationDocument | null>;
   listWatches(options?: { userId?: string }): Promise<WatchDocument[]>;
   getWatch(id: string): Promise<WatchDocument | null>;
   upsertWatch(watch: WatchDocument): Promise<void>;
