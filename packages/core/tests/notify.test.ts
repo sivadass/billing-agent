@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ExtractField } from '../src/store/types.ts';
-import { formatSuccessBody, formatFailureBody, sendNtfy } from '../src/notify.ts';
+import { formatSuccessBody, formatFailureBody, sendNtfy, dispatchNotify } from '../src/notify.ts';
+import { PublicUrlError } from '../src/assert-public-url.ts';
 
 const billSchema: ExtractField[] = [
   { key: 'amount', label: 'Amount', type: 'price' },
@@ -74,5 +75,54 @@ describe('sendNtfy', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     assert.equal(calls, 2);
+  });
+});
+
+describe('dispatchNotify', () => {
+  it('posts JSON to a public webhook URL', async () => {
+    let capturedUrl = '';
+    let capturedBody = '';
+    const fetchImpl = async (url: string, init?: RequestInit) => {
+      capturedUrl = url;
+      capturedBody = String(init?.body ?? '');
+      return new Response('ok', { status: 200 });
+    };
+
+    await dispatchNotify({
+      channel: { type: 'webhook', url: 'https://hooks.example.com/run' },
+      defaultNtfy: { baseUrl: 'https://ntfy.sh', priority: 'default' },
+      title: 'Job done',
+      body: 'Amount: ₹1',
+      webhookPayload: {
+        jobId: 'job-1',
+        runId: 'run-1',
+        status: 'success',
+        result: { amount: '₹1' },
+        error: null,
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    assert.equal(capturedUrl, 'https://hooks.example.com/run');
+    assert.deepEqual(JSON.parse(capturedBody), {
+      jobId: 'job-1',
+      runId: 'run-1',
+      status: 'success',
+      result: { amount: '₹1' },
+      error: null,
+    });
+  });
+
+  it('rejects webhook URLs that fail the public URL helper', async () => {
+    await assert.rejects(
+      dispatchNotify({
+        channel: { type: 'webhook', url: 'http://127.0.0.1/hook' },
+        defaultNtfy: { baseUrl: 'https://ntfy.sh', priority: 'default' },
+        title: 'Job done',
+        body: 'body',
+        webhookPayload: { jobId: 'job-1' },
+      }),
+      PublicUrlError,
+    );
   });
 });

@@ -23,8 +23,10 @@ import { createLogger } from './logger.js';
 import {
   formatFailureBody,
   formatSuccessBody,
+  dispatchNotify,
   sendNtfy,
 } from './notify.js';
+import { decideNotify } from './compare.js';
 import { tnpdclOverlayKeys, fingerprintFailure } from './overlay.js';
 import {
   extractCompactDom,
@@ -35,6 +37,7 @@ import type { BillingStore, RunDocument } from './store/types.js';
 export type RunnerDeps = {
   withBrowser: typeof withBrowser;
   sendNtfy: typeof sendNtfy;
+  dispatchNotify: typeof dispatchNotify;
   createMistralCaptchaSolver: typeof createMistralCaptchaSolver;
   getAdapter: (provider: string) => BillingAdapter;
   env: NodeJS.ProcessEnv;
@@ -49,6 +52,7 @@ export type RunnerDeps = {
 const defaultDeps: RunnerDeps = {
   withBrowser,
   sendNtfy,
+  dispatchNotify,
   createMistralCaptchaSolver,
   getAdapter,
   env: process.env,
@@ -175,26 +179,81 @@ function jobAdapterId(job: JobConfig): string {
   return adapterId;
 }
 
-type NotifyTarget =
-  | { skip: true; reason: string }
-  | { skip: false; baseUrl: string; topic: string };
-
-/**
- * Resolves where a job's notification should go. Webhook channels are not
- * implemented until slice 2 (Task 6) — this always skips them rather than
- * silently dropping the notify request. ntfy channels fall back to the
- * globally-resolved topic/baseUrl when the job doesn't set its own.
- */
-function resolveNotifyTarget(job: JobConfig, app: AppConfig): NotifyTarget {
-  const channel = job.notify.channel;
-  if (channel.type === 'webhook') {
-    return { skip: true, reason: 'webhook not implemented' };
+function projectLastResult(
+  result: Record<string, unknown>,
+  schema: JobConfig['schema'],
+): Record<string, string | number> {
+  const projected: Record<string, string | number> = {};
+  for (const field of schema) {
+    const value = result[field.key];
+    if (typeof value === 'string' || typeof value === 'number') {
+      projected[field.key] = value;
+    }
   }
-  return {
-    skip: false,
-    baseUrl: channel.baseUrl || app.ntfy.baseUrl,
-    topic: channel.topic || app.ntfy.topic,
-  };
+  return projected;
+}
+
+async function sendJobNotification(input: {
+  app: AppConfig;
+  job: JobConfig;
+  runId: string;
+  status: 'success' | 'failed';
+  result: Record<string, unknown> | null;
+  adapterNotify?: boolean;
+  error?: AppError;
+  screenshotPath?: string;
+  dispatchNotifyImpl?: typeof dispatchNotify;
+}): Promise<void> {
+  const decision = decideNotify({
+    on: input.job.notify.on,
+    status: input.status,
+    result: input.result,
+    lastResult: input.job.lastResult,
+    schema: input.job.schema,
+    adapterNotify: input.adapterNotify,
+  });
+
+  if (input.status === 'success' && decision !== 'send_success') {
+    return;
+  }
+  if (input.status === 'failed' && decision !== 'send_failure') {
+    return;
+  }
+
+  const title =
+    input.status === 'failed'
+      ? `${input.job.notify.title} failed`
+      : input.job.notify.title;
+  const body =
+    input.status === 'failed' && input.error
+      ? formatFailureBody(input.job.id, input.error, input.screenshotPath)
+      : formatSuccessBody(input.result ?? {}, input.job.schema);
+
+  const channel =
+    input.job.notify.channel.type === 'ntfy' && !input.job.notify.channel.topic
+      ? { ...input.job.notify.channel, topic: input.app.ntfy.topic }
+      : input.job.notify.channel;
+
+  await (input.dispatchNotifyImpl ?? dispatchNotify)({
+    channel,
+    defaultNtfy: {
+      baseUrl: input.app.ntfy.baseUrl,
+      priority: input.app.ntfy.priority,
+    },
+    title,
+    body,
+    priority: input.status === 'failed' ? 'high' : input.app.ntfy.priority,
+    webhookPayload: {
+      jobId: input.job.id,
+      runId: input.runId,
+      status: input.status,
+      result: input.status === 'success' ? input.result : null,
+      error:
+        input.status === 'failed' && input.error
+          ? { code: input.error.code, message: input.error.message }
+          : null,
+    },
+  });
 }
 
 async function captureScreenshot(
@@ -354,18 +413,37 @@ export async function runJob(
     const record = billResultToRecord(result);
 
     if (result.notify !== false) {
-      const target = resolveNotifyTarget(job, app);
-      if (target.skip) {
-        logger.info('notify skipped', { reason: target.reason });
-      } else {
-        await runnerDeps.sendNtfy({
-          baseUrl: target.baseUrl,
-          topic: target.topic,
-          title: job.notify.title,
-          body: formatSuccessBody(record, job.schema),
-          priority: app.ntfy.priority,
+      const shouldNotifySuccess =
+        decideNotify({
+          on: job.notify.on,
+          status: 'success',
+          result: record,
+          lastResult: job.lastResult,
+          schema: job.schema,
+        }) === 'send_success';
+
+      if (shouldNotifySuccess) {
+        await sendJobNotification({
+          app,
+          job,
+          runId,
+          status: 'success',
+          result: record,
+          dispatchNotifyImpl: runnerDeps.dispatchNotify,
         });
+      } else {
+        logger.info('notify skipped', { reason: job.notify.on });
       }
+    } else {
+      logger.info('notify skipped', { reason: 'adapter notify false' });
+    }
+
+    if (runnerDeps.store) {
+      await runnerDeps.store.upsertJob({
+        ...job,
+        lastResult: projectLastResult(record, job.schema),
+        updatedAt: new Date().toISOString(),
+      });
     }
 
     logger.info('job success', {
@@ -399,18 +477,16 @@ export async function runJob(
     });
 
     try {
-      const target = resolveNotifyTarget(job, app);
-      if (target.skip) {
-        logger.warn('failure notify skipped', { reason: target.reason });
-      } else {
-        await runnerDeps.sendNtfy({
-          baseUrl: target.baseUrl,
-          topic: target.topic,
-          title: `${job.notify.title} failed`,
-          body: formatFailureBody(job.id, error, screenshotPath),
-          priority: 'high',
-        });
-      }
+      await sendJobNotification({
+        app,
+        job,
+        runId,
+        status: 'failed',
+        result: null,
+        error,
+        screenshotPath,
+        dispatchNotifyImpl: runnerDeps.dispatchNotify,
+      });
     } catch (notifyError) {
       logger.error('failure notification failed', {
         error: String(notifyError),

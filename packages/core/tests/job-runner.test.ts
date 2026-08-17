@@ -9,6 +9,25 @@ import { ConfigError, LoginError } from '../src/errors.ts';
 import { encryptSecret } from '../src/secrets.ts';
 import type { BillingStore, RunDocument, SecretDocument } from '../src/store/types.ts';
 import { billResultToRecord, runJob, runJobs } from '../src/job-runner.ts';
+import type { dispatchNotify as DispatchNotify } from '../src/notify.ts';
+
+function stubDispatchNotify(
+  notifications: Array<Record<string, unknown>>,
+): DispatchNotify {
+  return async (options) => {
+    if (options.channel.type === 'ntfy') {
+      notifications.push({
+        baseUrl: options.channel.baseUrl || options.defaultNtfy.baseUrl,
+        topic: options.channel.topic,
+        title: options.title,
+        body: options.body,
+        priority: options.priority,
+      });
+      return;
+    }
+    notifications.push(options as Record<string, unknown>);
+  };
+}
 
 const TEST_MASTER_KEY_HEX =
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -91,6 +110,7 @@ function storeWithSecrets(secrets: SecretDocument[]): BillingStore {
   return {
     async createRun() {},
     async finishRun() {},
+    async upsertJob() {},
     async listActiveOverlays() {
       return [];
     },
@@ -175,6 +195,7 @@ describe('runJob', () => {
       getAdapter: () => adapter,
       withBrowser: async (_browser, fn) => fn({} as Page),
       sendNtfy: async () => {},
+      dispatchNotify: async () => {},
       onRunCreated: (runId) => created.push(runId),
       proposeOverlayPatch: async () => {
         throw new ConfigError('unused');
@@ -210,6 +231,7 @@ describe('runJob', () => {
       getAdapter: () => adapter,
       withBrowser: async (_browser, fn) => fn({} as Page),
       sendNtfy: async () => {},
+      dispatchNotify: async () => {},
       proposeOverlayPatch: async () => {
         throw new ConfigError('unused');
       },
@@ -225,6 +247,7 @@ describe('runJob', () => {
       async finishRun(_id: string, update: Partial<RunDocument>) {
         runUpdates.push(update);
       },
+      async upsertJob() {},
       async listActiveOverlays() {
         return [];
       },
@@ -246,6 +269,7 @@ describe('runJob', () => {
       getAdapter: () => adapter,
       withBrowser: async (_config, callback) => callback({} as Page),
       sendNtfy: async () => {},
+      dispatchNotify: async () => {},
     });
 
     assert.equal(result.ok, true);
@@ -320,6 +344,7 @@ describe('runJob', () => {
           screenshot: async () => Buffer.alloc(0),
         } as unknown as Page),
       sendNtfy: async () => {},
+      dispatchNotify: async () => {},
       createMistralCaptchaSolver: () => ({
         solveFromImageBase64: async () => 'captcha',
       }),
@@ -349,6 +374,7 @@ describe('runJob', () => {
     const result = await runJob(app, job, {
       withBrowser: async (_config, callback) => callback({} as Page),
       sendNtfy: async () => {},
+      dispatchNotify: async () => {},
       createMistralCaptchaSolver: () => ({
         solveFromImageBase64: async () => 'captcha',
       }),
@@ -383,6 +409,7 @@ describe('runJob', () => {
 
     const result = await runJob(app, jobWithSecret, {
       withBrowser: async (_config, callback) => callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -435,6 +462,7 @@ describe('runJob', () => {
       await runJob(app, jobWithSecret, {
         withBrowser: async (_config, callback) => callback({} as Page),
         sendNtfy: async () => {},
+      dispatchNotify: async () => {},
         createMistralCaptchaSolver: () => ({
           solveFromImageBase64: async () => 'captcha',
         }),
@@ -470,6 +498,7 @@ describe('runJob', () => {
 
     await runJob(app, customTopicJob, {
       withBrowser: async (_config, callback) => callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -496,6 +525,7 @@ describe('runJob', () => {
 
     await runJob(app, job, {
       withBrowser: async (_config, callback) => callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -511,7 +541,7 @@ describe('runJob', () => {
     assert.equal(notifications[0]?.baseUrl, app.ntfy.baseUrl);
   });
 
-  it('skips success notify for webhook channels (not implemented until slice 2)', async () => {
+  it('dispatches success notify for webhook channels', async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const webhookJob: JobConfig = {
       ...job,
@@ -529,6 +559,7 @@ describe('runJob', () => {
 
     const result = await runJob(app, webhookJob, {
       withBrowser: async (_config, callback) => callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -540,10 +571,11 @@ describe('runJob', () => {
     });
 
     assert.equal(result.ok, true);
-    assert.deepEqual(notifications, []);
+    assert.equal(notifications.length, 1);
+    assert.equal((notifications[0] as { channel: { type: string } }).channel.type, 'webhook');
   });
 
-  it('skips failure notify for webhook channels (not implemented until slice 2)', async () => {
+  it('dispatches failure notify for webhook channels', async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const webhookJob: JobConfig = {
       ...job,
@@ -562,6 +594,7 @@ describe('runJob', () => {
 
     const result = await runJob(app, webhookJob, {
       withBrowser: async (_config, callback) => callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -573,7 +606,8 @@ describe('runJob', () => {
     });
 
     assert.deepEqual(result, { ok: false, error: loginError });
-    assert.deepEqual(notifications, []);
+    assert.equal(notifications.length, 1);
+    assert.equal((notifications[0] as { title: string }).title, 'Fake bill failed');
   });
 
   it('skips success notification when result.notify is false', async () => {
@@ -594,6 +628,7 @@ describe('runJob', () => {
 
     const result = await runJob(app, job, {
       withBrowser: async (_config, callback) => callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -620,6 +655,7 @@ describe('runJob', () => {
     const result = await runJob(app, job, {
       withBrowser: async (_config, callback) => callback({} as Page),
       sendNtfy: async () => {},
+      dispatchNotify: async () => {},
       createMistralCaptchaSolver: () => {
         solverFactoryCalls += 1;
         return { solveFromImageBase64: async () => 'captcha' };
@@ -645,6 +681,7 @@ describe('runJob', () => {
     const result = await runJob(app, job, {
       withBrowser: async (_config, callback) =>
         callback({} as Page),
+      dispatchNotify: stubDispatchNotify(notifications),
       sendNtfy: async (options) => {
         notifications.push(options);
       },
@@ -693,6 +730,9 @@ describe('runJob', () => {
       job,
       {
         withBrowser: async (_config, callback) => callback(page),
+        dispatchNotify: async (options) => {
+          notificationBody = options.body;
+        },
         sendNtfy: async (options) => {
           notificationBody = options.body;
         },
@@ -740,6 +780,7 @@ describe('runJob', () => {
       {
         withBrowser: async (_config, callback) => callback(page),
         sendNtfy: async () => {},
+      dispatchNotify: async () => {},
         createMistralCaptchaSolver: () => ({
           solveFromImageBase64: async () => 'captcha',
         }),
@@ -837,6 +878,7 @@ describe('runJobs', () => {
         withBrowser: async (_config, callback) =>
           callback({} as Page),
         sendNtfy: async () => {},
+        dispatchNotify: async () => {},
         createMistralCaptchaSolver: () => ({
           solveFromImageBase64: async () => 'captcha',
         }),

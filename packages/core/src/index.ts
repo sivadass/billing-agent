@@ -17,6 +17,7 @@ export * from './extract/types.js';
 export * from './extract/workflow-strategies.js';
 export * from './job-runner.js';
 export * from './logger.js';
+export * from './compare.js';
 export * from './migrate-generic-jobs.js';
 export * from './notify.js';
 export * from './overlay.js';

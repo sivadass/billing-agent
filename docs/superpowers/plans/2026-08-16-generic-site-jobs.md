@@ -395,7 +395,7 @@ Webhook: `POST` JSON spec payload; retry once; `assertPublicUrl(channel.url)` fi
 
 Drop rule: find schema field with `type === 'price'`; numeric compare; currency key `currency` if present. Mirror price-monitor gates (`price <= 0` is a failed extract, not a drop).
 
-- [ ] Tests for all four `on` values and webhook SSRF reject `http://127.0.0.1/`.
+- [x] Tests for all four `on` values and webhook SSRF reject `http://127.0.0.1/`.
 
 ### Task 10: Browser lock + job-runner engine switch
 
