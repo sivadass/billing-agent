@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Mistral } from '@mistralai/mistralai';
 import type { BillingAdapter, BillResult } from './adapters/types.js';
 import { getAdapter } from './adapters/registry.js';
+import type { BrowserLock } from './browser-lock.js';
 import { withBrowser } from './browser.js';
 import { createMistralCaptchaSolver, type CaptchaSolver } from './captcha.js';
 import {
@@ -33,6 +34,8 @@ import {
   proposeOverlayPatch as proposeOverlayPatchWithDeps,
 } from './recovery.js';
 import type { BillingStore, RunDocument } from './store/types.js';
+import { defaultExtractStrategies } from './workflow/extract-strategies.js';
+import { runWorkflow } from './workflow/interpreter.js';
 
 export type RunnerDeps = {
   withBrowser: typeof withBrowser;
@@ -40,9 +43,16 @@ export type RunnerDeps = {
   dispatchNotify: typeof dispatchNotify;
   createMistralCaptchaSolver: typeof createMistralCaptchaSolver;
   getAdapter: (provider: string) => BillingAdapter;
+  runWorkflow: typeof runWorkflow;
   env: NodeJS.ProcessEnv;
   store?: BillingStore;
   onRunCreated?: (runId: string) => void;
+  /**
+   * Serializes Chromium with the other users in this process (Run now, cron,
+   * chat authoring). Omitted in tests and one-shot CLI runs, where nothing else
+   * can be driving the browser.
+   */
+  lock?: BrowserLock;
   proposeOverlayPatch: (
     input: Parameters<typeof proposeOverlayPatchWithDeps>[0],
   ) => Promise<Awaited<ReturnType<typeof proposeOverlayPatchWithDeps>>>;
@@ -55,6 +65,7 @@ const defaultDeps: RunnerDeps = {
   dispatchNotify,
   createMistralCaptchaSolver,
   getAdapter,
+  runWorkflow,
   env: process.env,
   proposeOverlayPatch: async () => {
     throw new ConfigError('Recovery proposer not configured');
@@ -62,9 +73,21 @@ const defaultDeps: RunnerDeps = {
   extractCompactDom,
 };
 
+/** An adapter returns a `BillResult`; the interpreter returns the extracted record. */
+export type JobRunOutput = BillResult | Record<string, unknown>;
+
 export type RunJobResult =
-  | { ok: true; result: BillResult }
+  | { ok: true; result: JobRunOutput }
   | { ok: false; error: AppError };
+
+type JobExecution = {
+  /** Returned to the caller unchanged, so adapter callers still see a `BillResult`. */
+  result: JobRunOutput;
+  /** The generic projection stored on the run and fed to notify/compare. */
+  record: Record<string, unknown>;
+  /** Adapters may opt out of the success notification; workflows never do. */
+  adapterNotify?: boolean;
+};
 
 /**
  * Wraps captcha solver creation so the Mistral API key is only resolved (and
@@ -284,23 +307,54 @@ async function captureScreenshot(
   }
 }
 
+/**
+ * Runs one job, holding the browser lock (when one is configured) for the whole
+ * run. A busy lock is refused rather than queued: the caller is either the API
+ * (which answers 409) or the scheduler (which skips the tick), so a refused run
+ * writes no run document at all.
+ */
 export async function runJob(
   app: AppConfig,
   job: JobConfig,
   deps: Partial<RunnerDeps> = {},
 ): Promise<RunJobResult> {
   const runnerDeps = { ...defaultDeps, ...deps };
+  const runId = randomUUID();
+  const lock = runnerDeps.lock;
+
+  if (lock && !lock.tryAcquire({ kind: 'run', id: runId })) {
+    const holder = lock.current();
+    createLogger(job.id).warn('job skipped because the browser is busy', {
+      heldBy: holder?.kind ?? 'unknown',
+    });
+    return { ok: false, error: new ScrapeError('Browser busy') };
+  }
+
+  try {
+    return await executeJob(app, job, runnerDeps, deps, runId);
+  } finally {
+    lock?.release(runId);
+  }
+}
+
+async function executeJob(
+  app: AppConfig,
+  job: JobConfig,
+  runnerDeps: RunnerDeps,
+  deps: Partial<RunnerDeps>,
+  runId: string,
+): Promise<RunJobResult> {
   const logger = createLogger(job.id);
   let screenshotPath: string | undefined;
   let screenshotBase64: string | undefined;
   const startedAt = Date.now();
-  const runId = randomUUID();
   let recoveryAttempted = false;
   let recoverySucceeded = false;
   let overlayActivated = false;
   logger.info('job start');
 
-  const adapterId = jobAdapterId(job);
+  // A workflow job replays its own steps, so it has no adapter to name.
+  const adapterId = job.engine === 'workflow' ? undefined : jobAdapterId(job);
 
   if (runnerDeps.store) {
     await runnerDeps.store.createRun({
@@ -308,7 +362,7 @@ export async function runJob(
       jobId: job.id,
       userId: job.userId,
       engine: job.engine,
-      adapterId,
+      ...(adapterId === undefined ? {} : { adapterId }),
       status: 'running',
       startedAt: new Date(startedAt).toISOString(),
       finishedAt: null,
@@ -331,14 +385,41 @@ export async function runJob(
     const proposePatch =
       deps.proposeOverlayPatch ?? createRecoveryPatchProposer(app, runnerDeps);
 
-    const result = await runnerDeps.withBrowser(app.browser, async (page) => {
-      const adapter = runnerDeps.getAdapter(adapterId);
+    const execution = await runnerDeps.withBrowser(app.browser, async (page) => {
       const captchaSolver = createLazyCaptchaSolver(runnerDeps, app.mistral);
+
+      if (job.engine === 'workflow') {
+        try {
+          // Deterministic replay only: the interpreter's sole LLM seam is the
+          // captcha solver, and the strategies are the default DOM/JSON ones.
+          const record = await runnerDeps.runWorkflow({
+            page,
+            steps: job.workflow,
+            secrets,
+            captchaSolver,
+            timeoutMs: app.browser.timeoutMs,
+            schema: job.schema,
+            logger,
+            extractStrategies: defaultExtractStrategies,
+          });
+          return { result: record, record };
+        } catch (cause) {
+          // Workflow selector recovery arrives with the generalized overlay
+          // keys (slice 4); for now a failed step is simply a failed run.
+          const screenshot = await captureScreenshot(app, job, logger, page);
+          screenshotPath = screenshot.path;
+          throw toAppError(cause);
+        }
+      }
+
+      // Always set on this path: an adapter job without one already threw.
+      const provider = adapterId ?? jobAdapterId(job);
+      const adapter = runnerDeps.getAdapter(provider);
 
       const activeOverlay = runnerDeps.store
         ? (
             await runnerDeps.store.listActiveOverlays({
-              provider: adapterId,
+              provider,
               jobId: job.id,
             })
           )[0]?.patch
@@ -354,8 +435,14 @@ export async function runJob(
           overlay,
         });
 
+      const toExecution = (result: BillResult): JobExecution => ({
+        result,
+        record: billResultToRecord(result),
+        adapterNotify: result.notify,
+      });
+
       try {
-        return await runAdapter();
+        return toExecution(await runAdapter());
       } catch (cause) {
         const screenshot = await captureScreenshot(app, job, logger, page);
         screenshotPath = screenshot.path;
@@ -399,20 +486,20 @@ export async function runJob(
 
         const retryResult = await runAdapter(patch);
         const overlay = await runnerDeps.store.recordOverlaySuccess({
-          provider: adapterId,
+          provider,
           jobId: job.id,
           fingerprint,
           patch,
         });
         recoverySucceeded = true;
         overlayActivated = overlay.status === 'active' && overlay.successCount >= 3;
-        return retryResult;
+        return toExecution(retryResult);
       }
     });
 
-    const record = billResultToRecord(result);
+    const { result, record } = execution;
 
-    if (result.notify !== false) {
+    if (execution.adapterNotify !== false) {
       const shouldNotifySuccess =
         decideNotify({
           on: job.notify.on,
@@ -448,7 +535,7 @@ export async function runJob(
 
     logger.info('job success', {
       durationMs: Date.now() - startedAt,
-      ...(result.notify === false ? { notifySkipped: true } : {}),
+      ...(execution.adapterNotify === false ? { notifySkipped: true } : {}),
     });
 
     if (runnerDeps.store) {

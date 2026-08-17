@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AppConfig, SettingsDocument, WatchDocument } from '@billing-agent/core';
+import { createBrowserLock } from '@billing-agent/core';
 import { startDaemon } from '../src/scheduler.ts';
 
 const baseApp: AppConfig = {
@@ -256,5 +257,101 @@ describe('startDaemon', () => {
 
     assert.deepEqual(calls, ['2 9 * * *', '1 9 * * *', '1 9 * * *']);
     assert.deepEqual(stopCalls, ['1 9 * * *', '1 9 * * *', '2 9 * * *']);
+  });
+});
+
+describe('startDaemon — browser lock', () => {
+  const scheduledJobApp: AppConfig = {
+    ...baseApp,
+    jobs: [
+      {
+        id: 'daily-check',
+        provider: 'dummy',
+        enabled: true,
+        schedule: '0 9 * * *',
+        credentialsEnv: {},
+        notify: { title: 'Daily bill' },
+      },
+    ],
+  } as AppConfig;
+
+  /** Registers the cron tasks, then fires the one job tick the app schedules. */
+  async function fireJobTick(
+    deps: Parameters<typeof startDaemon>[1],
+  ): Promise<{ warnings: string[] }> {
+    const warnings: string[] = [];
+    let tick: (() => void) | undefined;
+
+    await startDaemon(scheduledJobApp, {
+      cron: {
+        validate: () => true,
+        schedule: (_expression, task) => {
+          tick = task;
+          return {};
+        },
+      },
+      keepAlive: async () => {
+        tick?.();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+      logger: {
+        info: () => {},
+        warn: (message) => warnings.push(message),
+        error: () => {},
+      },
+      ...deps,
+    });
+
+    return { warnings };
+  }
+
+  it('skips the tick while the browser lock is held', async () => {
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: 'conversation-1' });
+    const runJobsCalls: unknown[] = [];
+
+    const { warnings } = await fireJobTick({
+      lock,
+      runJobs: async (...args: unknown[]) => {
+        runJobsCalls.push(args);
+        return { failed: 0 };
+      },
+    } as unknown as Parameters<typeof startDaemon>[1]);
+
+    assert.deepEqual(runJobsCalls, []);
+    assert.equal(
+      warnings.some((message) => /browser is busy/i.test(message)),
+      true,
+    );
+    assert.deepEqual(lock.current(), { kind: 'authoring', id: 'conversation-1' });
+  });
+
+  it('runs the tick and hands the lock to the runner when nothing holds it', async () => {
+    const lock = createBrowserLock();
+    const runJobsDeps: Array<Record<string, unknown>> = [];
+
+    await fireJobTick({
+      lock,
+      runJobs: async (_app: unknown, _ids: unknown, deps: Record<string, unknown>) => {
+        runJobsDeps.push(deps);
+        return { failed: 0 };
+      },
+    } as unknown as Parameters<typeof startDaemon>[1]);
+
+    assert.equal(runJobsDeps.length, 1);
+    assert.equal(runJobsDeps[0]?.lock, lock);
+  });
+
+  it('runs the tick unchanged when no lock is configured', async () => {
+    const runJobsCalls: unknown[] = [];
+
+    await fireJobTick({
+      runJobs: async (...args: unknown[]) => {
+        runJobsCalls.push(args);
+        return { failed: 0 };
+      },
+    } as unknown as Parameters<typeof startDaemon>[1]);
+
+    assert.equal(runJobsCalls.length, 1);
   });
 });

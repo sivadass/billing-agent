@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import type { BillingStore } from '@billing-agent/core';
+import type { BillingStore, BrowserLock } from '@billing-agent/core';
 import { applyCors } from './cors.js';
 import { handleRoute } from './routes.js';
 
@@ -12,6 +12,8 @@ export type StartServerInput = {
   onRunWatch?: (watchId: string) => Promise<string>;
   /** Source of `SECRETS_MASTER_KEY` for the job secrets routes. */
   env?: NodeJS.ProcessEnv;
+  /** Shared with the worker's runner and scheduler so Run now can answer 409 while the browser is in use. */
+  lock?: BrowserLock;
 };
 
 export type ApiServerHandle = {
@@ -32,6 +34,7 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
       onRunJob: input.onRunJob,
       onRunWatch: input.onRunWatch,
       env: input.env ?? process.env,
+      lock: input.lock,
     }).catch(
       (error: unknown) => {
         res.statusCode = 500;

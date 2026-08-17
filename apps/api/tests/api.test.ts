@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
-import { decryptSecret, hashPassword, parseMasterKey } from '@billing-agent/core';
+import {
+  createBrowserLock,
+  decryptSecret,
+  hashPassword,
+  parseMasterKey,
+} from '@billing-agent/core';
 import type {
   BillingStore,
+  BrowserLock,
   JobDocument,
   PriceCheckDocument,
   RunDocument,
@@ -304,6 +310,7 @@ async function setupAuthedServer(options?: {
   onRunWatch?: (watchId: string) => Promise<string>;
   corsOrigins?: string[];
   env?: NodeJS.ProcessEnv;
+  lock?: BrowserLock;
 }): Promise<{
   handle: { port: number; close: () => Promise<void> };
   store: MemoryStore;
@@ -320,6 +327,7 @@ async function setupAuthedServer(options?: {
     onRunWatch: options?.onRunWatch,
     corsOrigins: options?.corsOrigins,
     env: options?.env ?? TEST_ENV,
+    lock: options?.lock,
   });
   handles.push(handle);
 
@@ -1927,6 +1935,123 @@ describe('POST /jobs/:id/run', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(response.status, 409);
+  });
+
+  it('returns 409 Browser busy when an authoring session holds the browser lock', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: 'conversation-1' });
+    let runStarts = 0;
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => {
+        runStarts += 1;
+        return 'run-x';
+      },
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Browser busy' });
+    assert.equal(runStarts, 0);
+  });
+
+  it('returns 409 Browser busy when another job run holds the browser lock', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'run', id: 'run-elsewhere' });
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => 'run-x',
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Browser busy' });
+  });
+
+  it('starts the run once the lock is released', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: 'conversation-1' });
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => 'run-123',
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+    const url = `http://127.0.0.1:${handle.port}/jobs/home-eb/run`;
+    const headers = { Authorization: `Bearer ${token}` };
+
+    assert.equal((await fetch(url, { method: 'POST', headers })).status, 409);
+
+    lock.release('conversation-1');
+
+    const response = await fetch(url, { method: 'POST', headers });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { id: 'run-123' });
+  });
+
+  it('answers 409 Browser busy when the runner loses the lock race', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock: createBrowserLock(),
+      onRunJob: async () => {
+        throw new Error('Browser busy');
+      },
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Browser busy' });
+  });
+
+  it('keeps the per-job "already running" 409 ahead of the lock check', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'run', id: 'run-for-this-job' });
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => 'run-x',
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+    await store.createRun(
+      canonicalRun({
+        id: 'existing',
+        jobId: 'home-eb',
+        userId: user.id,
+        status: 'running',
+        finishedAt: null,
+        durationMs: null,
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Job already running' });
   });
 });
 

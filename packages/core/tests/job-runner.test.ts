@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
+import { registerBuiltInAdapters } from '../src/adapters/registry.ts';
+import { createBrowserLock, type BrowserLockOwner } from '../src/browser-lock.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
 import { ConfigError, LoginError } from '../src/errors.ts';
 import { encryptSecret } from '../src/secrets.ts';
-import type { BillingStore, RunDocument, SecretDocument } from '../src/store/types.ts';
+import type { BillingStore, JobDocument, RunDocument, SecretDocument } from '../src/store/types.ts';
 import { billResultToRecord, runJob, runJobs } from '../src/job-runner.ts';
 import type { dispatchNotify as DispatchNotify } from '../src/notify.ts';
 
@@ -818,6 +820,335 @@ describe('runJob', () => {
     });
 
     assert.deepEqual(result, { ok: false, error: loginError });
+  });
+});
+
+/** Captures everything `runJob` writes: run documents, run updates, job upserts. */
+function recordingStore(): {
+  store: BillingStore;
+  runs: RunDocument[];
+  runUpdates: Array<Partial<RunDocument>>;
+  jobUpserts: JobDocument[];
+} {
+  const runs: RunDocument[] = [];
+  const runUpdates: Array<Partial<RunDocument>> = [];
+  const jobUpserts: JobDocument[] = [];
+  const store = {
+    async createRun(run: RunDocument) {
+      runs.push(run);
+    },
+    async finishRun(_id: string, update: Partial<RunDocument>) {
+      runUpdates.push(update);
+    },
+    async upsertJob(next: JobDocument) {
+      jobUpserts.push(next);
+    },
+    async listActiveOverlays() {
+      return [];
+    },
+    async listSecrets() {
+      return [];
+    },
+  } as unknown as BillingStore;
+  return { store, runs, runUpdates, jobUpserts };
+}
+
+/** Real Chromium, so the adapter/interpreter paths run exactly as a scheduled run would. */
+const liveApp: AppConfig = {
+  ...app,
+  browser: { headless: true, timeoutMs: 30_000, saveErrorScreenshot: false },
+};
+
+const sivadassJob: JobConfig = {
+  id: 'sivadass-in-email',
+  userId: 'user-1',
+  name: 'Sivadass contact email',
+  enabled: true,
+  schedule: null,
+  startUrl: 'https://sivadass.in/',
+  engine: 'workflow',
+  goal: 'Grab the contact email address',
+  schema: [{ key: 'email', label: 'Email', type: 'string' }],
+  workflow: [
+    { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+    {
+      id: 'extract-email',
+      type: 'extract',
+      fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+    },
+  ],
+  secretIds: [],
+  notify: {
+    title: 'Sivadass contact email',
+    on: 'always',
+    channel: { type: 'ntfy', topic: '' },
+  },
+  lastResult: null,
+  createdAt: '2026-08-16T00:00:00.000Z',
+  updatedAt: '2026-08-16T00:00:00.000Z',
+};
+
+describe('runJob — engine switch', () => {
+  it('still runs a dummy adapter job through the real browser and writes result.amount', async () => {
+    registerBuiltInAdapters();
+    const { store, runs, runUpdates, jobUpserts } = recordingStore();
+    const dummyJob: JobConfig = {
+      ...job,
+      id: 'smoke-test',
+      name: 'Dummy Bill',
+      adapterId: 'dummy',
+      engine: 'adapter',
+      workflow: [],
+    };
+
+    const result = await runJob(liveApp, dummyJob, {
+      env: testEnv,
+      store,
+      sendNtfy: async () => {},
+      dispatchNotify: async () => {},
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(runs[0]?.engine, 'adapter');
+    assert.equal(runs[0]?.adapterId, 'dummy');
+    assert.equal(runUpdates.at(-1)?.status, 'success');
+    assert.equal(
+      (runUpdates.at(-1)?.result as Record<string, unknown>)?.amount,
+      '₹999.00',
+    );
+    assert.equal(jobUpserts.at(-1)?.lastResult?.amount, '₹999.00');
+  });
+
+  it('runs a workflow job through the interpreter, never the adapter registry', async () => {
+    const { store, runs, runUpdates, jobUpserts } = recordingStore();
+    let adapterLookups = 0;
+
+    const result = await runJob(liveApp, sivadassJob, {
+      env: testEnv,
+      store,
+      getAdapter: () => {
+        adapterLookups += 1;
+        throw new ConfigError('adapter registry must not be used for a workflow job');
+      },
+      runWorkflow: async (input) => {
+        assert.deepEqual(input.steps, sivadassJob.workflow);
+        assert.deepEqual(input.secrets, {});
+        assert.deepEqual(input.schema, sivadassJob.schema);
+        assert.equal(input.timeoutMs, liveApp.browser.timeoutMs);
+        assert.equal(typeof input.captchaSolver.solveFromImageBase64, 'function');
+        assert.equal(typeof input.extractStrategies?.text, 'function');
+        return { email: 'contact@sivadass.in' };
+      },
+      withBrowser: async (_config, callback) => callback({} as Page),
+      sendNtfy: async () => {},
+      dispatchNotify: async () => {},
+    });
+
+    assert.deepEqual(result, { ok: true, result: { email: 'contact@sivadass.in' } });
+    assert.equal(adapterLookups, 0);
+    assert.equal(runs[0]?.engine, 'workflow');
+    assert.equal('adapterId' in (runs[0] ?? {}), false);
+    assert.deepEqual(runUpdates.at(-1)?.result, { email: 'contact@sivadass.in' });
+    assert.deepEqual(jobUpserts.at(-1)?.lastResult, { email: 'contact@sivadass.in' });
+  });
+
+  it('extracts contact@sivadass.in from the live canonical site (network)', async () => {
+    const { store, runUpdates, jobUpserts } = recordingStore();
+    const notifications: Array<Record<string, unknown>> = [];
+
+    const result = await runJob(liveApp, sivadassJob, {
+      env: testEnv,
+      store,
+      dispatchNotify: stubDispatchNotify(notifications),
+      sendNtfy: async () => {},
+    });
+
+    assert.equal(result.ok, true);
+    const email = result.ok
+      ? String((result.result as Record<string, unknown>).email)
+      : '';
+    assert.equal(email.trim().toLowerCase(), 'contact@sivadass.in');
+    assert.equal(runUpdates.at(-1)?.status, 'success');
+    assert.equal(
+      String(
+        (runUpdates.at(-1)?.result as Record<string, unknown>)?.email,
+      )
+        .trim()
+        .toLowerCase(),
+      'contact@sivadass.in',
+    );
+    assert.equal(
+      String(jobUpserts.at(-1)?.lastResult?.email).trim().toLowerCase(),
+      'contact@sivadass.in',
+    );
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0]?.title, 'Sivadass contact email');
+  });
+
+  it('fails a workflow job whose schema field is not extracted', async () => {
+    const { store, runUpdates } = recordingStore();
+
+    const result = await runJob(
+      liveApp,
+      {
+        ...sivadassJob,
+        workflow: [
+          { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+          {
+            id: 'extract-email',
+            type: 'extract',
+            fields: [{ key: 'email', selector: '#no-such-element', strategy: 'text' }],
+          },
+        ],
+      },
+      {
+        env: testEnv,
+        store,
+        withBrowser: async (_config, callback) => callback({} as Page),
+        runWorkflow: async () => {
+          throw new LoginError('nothing extracted');
+        },
+        sendNtfy: async () => {},
+        dispatchNotify: async () => {},
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(runUpdates.at(-1)?.status, 'failed');
+    assert.equal(runUpdates.at(-1)?.errorCode, 'LoginError');
+  });
+});
+
+describe('runJob — replay boundaries', () => {
+  it('never imports the authoring package: a saved workflow replays without the authoring LLM', () => {
+    const source = readFileSync(resolve('packages/core/src/job-runner.ts'), 'utf8');
+    const specifiers = [
+      ...source.matchAll(/(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g),
+    ].map((match) => match[1]);
+
+    for (const specifier of specifiers) {
+      assert.ok(
+        !/authoring/.test(specifier),
+        `job-runner must not import ${specifier}`,
+      );
+    }
+  });
+});
+
+describe('runJob — browser lock', () => {
+  const adapterStubs = (adapter: BillingAdapter) => ({
+    withBrowser: async (_config: unknown, callback: (page: Page) => unknown) =>
+      callback({} as Page),
+    sendNtfy: async () => {},
+    dispatchNotify: async () => {},
+    getAdapter: () => adapter,
+    env: testEnv,
+  });
+
+  it('holds the lock under the run id while the job runs and releases it after', async () => {
+    const lock = createBrowserLock();
+    const held: Array<BrowserLockOwner | null> = [];
+    let runId = '';
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        held.push(lock.current());
+        return billResult;
+      },
+    };
+
+    const result = await runJob(app, job, {
+      ...adapterStubs(adapter),
+      lock,
+      onRunCreated: (id) => {
+        runId = id;
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(held[0]?.kind, 'run');
+    assert.equal(held[0]?.id, runId);
+    assert.equal(lock.current(), null);
+  });
+
+  it('releases the lock when the job fails', async () => {
+    const lock = createBrowserLock();
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        throw new LoginError('credentials rejected');
+      },
+    };
+
+    const result = await runJob(app, job, { ...adapterStubs(adapter), lock });
+
+    assert.equal(result.ok, false);
+    assert.equal(lock.current(), null);
+  });
+
+  it('does not start (or record) a run while another owner holds the lock', async () => {
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: 'conversation-1' });
+    const { store, runs } = recordingStore();
+    let adapterRuns = 0;
+    const adapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        adapterRuns += 1;
+        return billResult;
+      },
+    };
+
+    const result = await runJob(app, job, {
+      ...adapterStubs(adapter),
+      store,
+      lock,
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? '' : result.error.message, /browser busy/i);
+    assert.equal(adapterRuns, 0);
+    assert.deepEqual(runs, []);
+    assert.deepEqual(lock.current(), { kind: 'authoring', id: 'conversation-1' });
+  });
+
+  it('serializes overlapping runs: the second one is refused, then succeeds once the first finishes', async () => {
+    const lock = createBrowserLock();
+    let releaseFirst: () => void = () => {};
+    const firstRunning = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted: () => void = () => {};
+    const firstHasLock = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+
+    const slowAdapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        firstStarted();
+        await firstRunning;
+        return billResult;
+      },
+    };
+    const fastAdapter: BillingAdapter = {
+      id: 'fake',
+      async run() {
+        return billResult;
+      },
+    };
+
+    const first = runJob(app, job, { ...adapterStubs(slowAdapter), lock });
+    await firstHasLock;
+
+    const refused = await runJob(app, job, { ...adapterStubs(fastAdapter), lock });
+    assert.equal(refused.ok, false);
+
+    releaseFirst();
+    assert.equal((await first).ok, true);
+
+    const afterRelease = await runJob(app, job, { ...adapterStubs(fastAdapter), lock });
+    assert.equal(afterRelease.ok, true);
   });
 });
 

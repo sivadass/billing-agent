@@ -4,6 +4,7 @@ export * from './adapters/registry.js';
 export * from './adapters/tnpdcl.js';
 export * from './adapters/types.js';
 export * from './auth-password.js';
+export * from './browser-lock.js';
 export * from './browser.js';
 export * from './captcha.js';
 export * from './config.js';

@@ -14,6 +14,38 @@ import type { BillingStore, JobDocument, SecretDocument } from '../src/store/typ
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(dir, 'fixtures', 'jobs.valid.json');
+const exampleConfig = path.join(dir, '..', '..', '..', 'jobs.example.json');
+
+describe('jobs.example.json', () => {
+  it('seeds the canonical sivadass-in-email workflow job alongside the adapter jobs', () => {
+    const seed = loadSeedConfig({ configPath: exampleConfig });
+    const job = seed.jobs.find((candidate) => candidate.id === 'sivadass-in-email');
+
+    assert.ok(job, 'jobs.example.json must include sivadass-in-email');
+    assert.equal(job.engine, 'workflow');
+    assert.equal(job.startUrl, 'https://sivadass.in/');
+    assert.equal(job.adapterId, undefined);
+    assert.deepEqual(job.schema, [
+      { key: 'email', label: 'Email', type: 'string' },
+    ]);
+    assert.deepEqual(job.workflow, [
+      { id: 'goto-home', type: 'goto', url: 'https://sivadass.in/' },
+      {
+        id: 'extract-email',
+        type: 'extract',
+        fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+      },
+    ]);
+    assert.deepEqual(job.secretIds, []);
+    assert.equal(job.notify.on, 'always');
+
+    const adapterJobs = seed.jobs.filter((candidate) => candidate.engine === 'adapter');
+    assert.deepEqual(
+      adapterJobs.map((candidate) => candidate.id),
+      ['home-eb', 'smoke-test'],
+    );
+  });
+});
 
 describe('loadConfig', () => {
   it('succeeds with only NTFY_TOPIC set, storing credential env names unresolved', () => {

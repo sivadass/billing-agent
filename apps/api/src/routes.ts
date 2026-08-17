@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
   BillingStore,
+  BrowserLock,
   JobDocument,
   PriceSource,
   RunDocument,
@@ -28,6 +29,13 @@ export type RouteContext = {
   onRunWatch?: (watchId: string) => Promise<string>;
   authUser?: { id: string; email: string };
   env?: NodeJS.ProcessEnv;
+  /**
+   * The worker's browser lock, shared with the scheduler and (from slice 3)
+   * chat authoring. Only read here: whoever actually drives Chromium acquires
+   * it, this is the pre-flight that turns contention into a 409 instead of a
+   * failed run.
+   */
+  lock?: BrowserLock;
 };
 
 const DEFAULT_WATCH_SCHEDULE = '0 9 * * *';
@@ -590,9 +598,25 @@ export async function handleRoute(
       sendJson(res, 409, { error: 'Job already running' });
       return;
     }
-    const runId = await ctx.onRunJob(jobId);
-    sendJson(res, 202, { id: runId });
-    return;
+    // One Chromium per process: another run or an authoring session has it.
+    if (ctx.lock?.current()) {
+      sendJson(res, 409, { error: 'Browser busy' });
+      return;
+    }
+    try {
+      const runId = await ctx.onRunJob(jobId);
+      sendJson(res, 202, { id: runId });
+      return;
+    } catch (error) {
+      // The check above is not atomic with the runner's own acquire, so a
+      // caller that loses that race gets the same answer as one that never
+      // started.
+      if (error instanceof Error && /browser busy/i.test(error.message)) {
+        sendJson(res, 409, { error: 'Browser busy' });
+        return;
+      }
+      throw error;
+    }
   }
 
   if (method === 'GET' && pathname.startsWith('/jobs/')) {

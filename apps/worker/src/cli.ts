@@ -5,6 +5,7 @@ import {
   AppError,
   ConfigError,
   connectStore,
+  createBrowserLock,
   hashPassword,
   loadConfigFromStore,
   loadSeedConfig,
@@ -164,11 +165,16 @@ program
   .action(withErrorHandling(async () => {
     const store = await connectStore(requireMongoUri());
     const app = await loadConfigFromStore(store);
+    // One Chromium for the whole daemon: the API reads it to answer 409, the
+    // scheduler skips ticks while it is held, the runner acquires it per run,
+    // and slice 3's chat authoring will acquire it per conversation.
+    const lock = createBrowserLock();
     const server = await startServer({
       port: resolveHttpPort(),
       jwtSecret: requireJwtSecret(),
       store,
       corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
+      lock,
       onRunJob: async (jobId: string) => {
         const latest = await loadConfigFromStore(store);
         const job = latest.jobs.find((item) => item.id === jobId);
@@ -180,20 +186,29 @@ program
           let reported = false;
           void runJob(latest, job, {
             store,
+            lock,
             onRunCreated: (runId) => {
               reported = true;
               resolve(runId);
             },
-          }).catch((error: unknown) => {
-            if (!reported) {
-              reject(error instanceof Error ? error : new Error(String(error)));
-              return;
-            }
-            console.error(
-              `[daemon] run for ${jobId} failed after start:`,
-              error instanceof Error ? error.message : error,
-            );
-          });
+          })
+            .then((outcome) => {
+              // A run refused by the lock never reaches `onRunCreated`; the
+              // API turns this rejection into a 409 instead of hanging.
+              if (!reported && !outcome.ok) {
+                reject(new Error(outcome.error.message));
+              }
+            })
+            .catch((error: unknown) => {
+              if (!reported) {
+                reject(error instanceof Error ? error : new Error(String(error)));
+                return;
+              }
+              console.error(
+                `[daemon] run for ${jobId} failed after start:`,
+                error instanceof Error ? error.message : error,
+              );
+            });
         });
       },
       onRunWatch: async (watchId: string) => {
@@ -236,7 +251,7 @@ program
     });
 
     try {
-      await startDaemon(app, { store });
+      await startDaemon(app, { store, lock });
     } finally {
       await server.close();
       await store.close();

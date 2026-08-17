@@ -1,5 +1,10 @@
 import cron from 'node-cron';
-import type { AppConfig, BillingStore, WatchDocument } from '@billing-agent/core';
+import type {
+  AppConfig,
+  BillingStore,
+  BrowserLock,
+  WatchDocument,
+} from '@billing-agent/core';
 import {
   ConfigError,
   createLogger,
@@ -40,6 +45,8 @@ export type SchedulerDeps = {
   logger: Logger;
   keepAlive: () => Promise<void>;
   store?: BillingStore;
+  /** Shared with Run now and chat authoring; a held lock skips the tick rather than queueing it. */
+  lock?: BrowserLock;
   pollIntervalMs: number;
   setIntervalFn: typeof setInterval;
   clearIntervalFn: typeof clearInterval;
@@ -89,8 +96,23 @@ export async function startDaemon(
       const task = schedulerDeps.cron.schedule(
         job.schedule,
         () => {
+          // A cron tick is never queued: whoever has Chromium (Run now, another
+          // scheduled job, a chat session) keeps it, and this job waits for its
+          // next slot.
+          const holder = schedulerDeps.lock?.current();
+          if (holder) {
+            schedulerDeps.logger.warn(
+              'scheduled job skipped because the browser is busy',
+              { jobId: job.id, heldBy: holder.kind },
+            );
+            return;
+          }
+
           void schedulerDeps
-            .runJobs(activeApp, [job.id], schedulerDeps.store ? { store: schedulerDeps.store } : {})
+            .runJobs(activeApp, [job.id], {
+              ...(schedulerDeps.store ? { store: schedulerDeps.store } : {}),
+              ...(schedulerDeps.lock ? { lock: schedulerDeps.lock } : {}),
+            })
             .catch((error: unknown) => {
               schedulerDeps.logger.error('scheduled job failed', {
                 jobId: job.id,
