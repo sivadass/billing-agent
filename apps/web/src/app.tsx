@@ -12,6 +12,7 @@ import { ProtectedRoute } from './components/protected-route';
 import { UserAccountMenu } from './components/user-account-menu';
 import { clearAccessToken } from './lib/auth-token';
 import { JobFormPage } from './pages/job-form-page';
+import { ChatPage } from './pages/chat-page';
 import { JobsPage } from './pages/jobs-page';
 import { LoginPage } from './pages/login-page';
 import { RunDetailPage } from './pages/run-detail-page';
@@ -24,6 +25,7 @@ import styles from './app.module.scss';
 
 const MENU: Array<{ label: string; value: string; icon: any }> = [
   { label: 'Jobs', value: '/jobs', icon: 'work' },
+  { label: 'Chat', value: '/chat', icon: 'forum' },
   { label: 'Price watches', value: '/watches', icon: 'sell' },
   { label: 'Runs', value: '/runs', icon: 'history' },
   { label: 'Status', value: '/status', icon: 'monitor_heart' },
@@ -40,6 +42,8 @@ export function App() {
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/jobs/new" element={<JobFormPage />} />
             <Route path="/jobs/:jobId" element={<JobFormPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/chat/:conversationId" element={<ChatPage />} />
             <Route path="/watches" element={<WatchesPage />} />
             <Route path="/watches/new" element={<WatchFormPage />} />
             <Route path="/watches/:watchId/edit" element={<WatchFormPage />} />

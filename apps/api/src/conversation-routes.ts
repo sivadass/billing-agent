@@ -525,6 +525,37 @@ async function handleAbandon(
   sendJson(res, 200, updated);
 }
 
+async function handleReject(
+  res: ServerResponse,
+  ctx: ConversationRouteContext,
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  const conversation = await getOwnedConversation(ctx.store, conversationId, userId);
+  if (!conversation) {
+    sendJson(res, 404, { error: 'Conversation not found' });
+    return;
+  }
+  if (conversation.status !== 'confirming') {
+    sendJson(res, 409, { error: 'Conversation not confirming' });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const updated: ConversationDocument = {
+    ...conversation,
+    status: 'active',
+    updatedAt: now,
+  };
+  await ctx.store.upsertConversation(updated);
+
+  if (ctx.onAuthorConversation) {
+    void ctx.onAuthorConversation(conversationId).catch(() => {});
+  }
+
+  sendJson(res, 200, updated);
+}
+
 export async function handleConversationRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -568,6 +599,12 @@ export async function handleConversationRoutes(
   const abandonId = parseConversationSubresourceId(pathname, '/abandon');
   if (abandonId && method === 'POST') {
     await handleAbandon(res, ctx, userId, abandonId);
+    return true;
+  }
+
+  const rejectId = parseConversationSubresourceId(pathname, '/reject');
+  if (rejectId && method === 'POST') {
+    await handleReject(res, ctx, userId, rejectId);
     return true;
   }
 

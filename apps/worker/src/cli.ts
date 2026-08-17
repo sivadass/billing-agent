@@ -17,6 +17,10 @@ import {
   withBrowser,
 } from '@billing-agent/core';
 import { runWatch, runWatches } from '@billing-agent/price-monitor';
+import {
+  expireStaleAuthoringSessions,
+  handleAuthoringTurn,
+} from '@billing-agent/authoring';
 import { parseCorsOrigins, startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
 import { executeRunJobsCommand } from './run-jobs-command.js';
@@ -169,12 +173,24 @@ program
     // scheduler skips ticks while it is held, the runner acquires it per run,
     // and slice 3's chat authoring will acquire it per conversation.
     const lock = createBrowserLock();
+    await expireStaleAuthoringSessions(store);
     const server = await startServer({
       port: resolveHttpPort(),
       jwtSecret: requireJwtSecret(),
       store,
       corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
       lock,
+      onAuthorConversation: async (conversationId: string) => {
+        const latest = await loadConfigFromStore(store);
+        await handleAuthoringTurn({
+          store,
+          conversationId,
+          lock,
+          env: process.env,
+          mistral: latest.mistral,
+          browser: latest.browser,
+        });
+      },
       onRunJob: async (jobId: string) => {
         const latest = await loadConfigFromStore(store);
         const job = latest.jobs.find((item) => item.id === jobId);

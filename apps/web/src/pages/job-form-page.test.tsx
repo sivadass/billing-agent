@@ -175,6 +175,7 @@ describe('JobFormPage', () => {
     renderEditForm('/jobs/new');
 
     expect(await screen.findByText(/jobs are created from chat/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open chat/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /save job/i })).not.toBeInTheDocument();
     expect(jobsApi.getJob).not.toHaveBeenCalled();
   });

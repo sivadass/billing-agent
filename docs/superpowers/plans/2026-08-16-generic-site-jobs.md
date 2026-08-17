@@ -488,9 +488,9 @@ Rules:
 - `propose_job` sets `draftWorkflow`, `draftSchema`, `draftExtract`, status `confirming`.
 - Worker restart: `expireStaleAuthoringSessions()` marks conversations `expired` if status in `active|awaiting_secret|confirming` and no live session.
 
-- [ ] Mocked test: LLM `ask_secret` → status awaiting_secret (local login fixture / mocked page).
-- [ ] Mocked test: `propose_job` for sivadass.in email → confirming with `draftExtract.email`.
-- [ ] No real Mistral in CI.
+- [x] Mocked test: LLM `ask_secret` → status awaiting_secret (local login fixture / mocked page).
+- [x] Mocked test: `propose_job` for sivadass.in email → confirming with `draftExtract.email`.
+- [x] No real Mistral in CI.
 
 ### Task 13: Wire worker + web Chat hub
 

@@ -52,6 +52,51 @@ export type JobSecretKey = {
   set: true;
 };
 
+export type ConversationStatus =
+  | 'active'
+  | 'awaiting_secret'
+  | 'confirming'
+  | 'saved'
+  | 'abandoned'
+  | 'expired';
+
+export type ConversationMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  screenshotPath?: string;
+  createdAt: string;
+};
+
+export type ConversationDocument = {
+  id: string;
+  userId: string;
+  status: ConversationStatus;
+  jobId: string | null;
+  startUrl: string | null;
+  goal: string | null;
+  messages: ConversationMessage[];
+  draftWorkflow: unknown[] | null;
+  draftSchema: ExtractField[] | null;
+  draftExtract: Record<string, string | number> | null;
+  draftNotify: JobDocument['notify'] | null;
+  draftSchedule: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateConversationInput = {
+  startUrl: string;
+  goal: string;
+  schedule?: string | null;
+  notify?: JobDocument['notify'];
+};
+
+export type ConfirmConversationResponse = {
+  jobId: string;
+  conversationId: string;
+};
+
 export type RunDocument = {
   id: string;
   jobId: string;

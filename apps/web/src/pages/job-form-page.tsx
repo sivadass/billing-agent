@@ -174,7 +174,8 @@ export function JobFormPage() {
           margin="t-5"
           title="Jobs are created from Chat"
           description="Describe the site and the goal in a chat session, then confirm the proposed job."
-          primaryAction={{ label: 'Back to jobs', onClick: () => navigate('/jobs') }}
+          primaryAction={{ label: 'Open Chat', onClick: () => navigate('/chat') }}
+          secondaryAction={{ label: 'Back to jobs', onClick: () => navigate('/jobs') }}
         />
       </>
     );
