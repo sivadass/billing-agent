@@ -21,6 +21,7 @@ export * from './logger.js';
 export * from './compare.js';
 export * from './migrate-generic-jobs.js';
 export * from './notify.js';
+export * from './object-storage.js';
 export * from './overlay.js';
 export * from './recovery.js';
 export * from './secrets.js';

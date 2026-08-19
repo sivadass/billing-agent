@@ -46,6 +46,11 @@ Key runtime variables:
 | `TNPDCL_USERNAME` | TNPDCL login |
 | `TNPDCL_PASSWORD` | TNPDCL login |
 | `SECRETS_MASTER_KEY` | AES-256-GCM key wrapping per-job secrets (`secrets` collection); required before running/migrating any job with credentials |
+| `B2_ACCESS_KEY_ID` | Backblaze B2 application key id (alias: `B2_KEY_ID`) |
+| `B2_SECRET_ACCESS_KEY` | Backblaze B2 application key (alias: `B2_APPLICATION_KEY`) |
+| `B2_BUCKET_NAME` | Private B2 bucket for chat screenshots (alias: `B2_BUCKET`) |
+| `B2_ENDPOINT` | S3-compatible endpoint, e.g. `https://s3.us-east-005.backblazeb2.com` |
+| `B2_PRESIGNED_EXPIRES_SECONDS` | Signed GET URL lifetime (default `3600`) |
 
 ### Generating `SECRETS_MASTER_KEY`
 

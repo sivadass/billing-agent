@@ -15,6 +15,7 @@ import {
   decryptSecret,
   encryptSecret,
   parseMasterKey,
+  signConversationScreenshots,
 } from '@billing-agent/core';
 import type { RouteContext } from './routes.js';
 
@@ -335,7 +336,14 @@ async function handleGetConversation(
     }
   }
 
-  sendJson(res, 200, toConversationResponse(conversation, messages));
+  sendJson(
+    res,
+    200,
+    toConversationResponse(
+      conversation,
+      await signConversationScreenshots(messages, ctx.env ?? process.env),
+    ),
+  );
 }
 
 async function handlePostMessage(

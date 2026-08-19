@@ -75,6 +75,7 @@ export type ConversationMessage = {
   role: 'user' | 'assistant' | 'system';
   text: string;
   screenshotPath?: string;
+  screenshotUrl?: string;
   createdAt: string;
 };
 

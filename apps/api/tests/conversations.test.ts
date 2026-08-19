@@ -175,6 +175,7 @@ async function login(port: number, email: string, password: string): Promise<str
 async function setupServer(options?: {
   store?: ConversationMemoryStore;
   onAuthorConversation?: (conversationId: string) => Promise<void>;
+  env?: NodeJS.ProcessEnv;
 }) {
   const store = options?.store ?? new ConversationMemoryStore();
   const user = await createUser(store, 'owner@example.com', 'correct-password');
@@ -182,7 +183,7 @@ async function setupServer(options?: {
     port: 0,
     jwtSecret: JWT_SECRET,
     store,
-    env: TEST_ENV,
+    env: { ...TEST_ENV, ...options?.env },
     onAuthorConversation: options?.onAuthorConversation,
   });
   handles.push(handle);
@@ -427,5 +428,45 @@ describe('GET /conversations', () => {
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), []);
+  });
+});
+
+describe('GET /conversations/:id screenshots', () => {
+  it('attaches a presigned screenshot URL for B2 keys', async () => {
+    const { handle, store, user, token } = await setupServer({
+      env: {
+        B2_ACCESS_KEY_ID: 'test-key',
+        B2_SECRET_ACCESS_KEY: 'test-secret',
+        B2_BUCKET_NAME: 'notepad-attachments',
+        B2_ENDPOINT: 'https://s3.us-east-005.backblazeb2.com',
+      },
+    });
+    const key = 'billing-agent/conversations/conv-1/1.png';
+    await store.upsertConversation(
+      confirmingConversation(user.id, {
+        id: 'conv-1',
+        status: 'active',
+        messages: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            text: 'Captured a page snapshot.',
+            screenshotPath: key,
+            createdAt: '2026-08-19T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/conversations/conv-1`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      messages: Array<{ screenshotPath?: string; screenshotUrl?: string }>;
+    };
+    assert.equal(body.messages[0]?.screenshotPath, key);
+    assert.match(body.messages[0]?.screenshotUrl ?? '', /X-Amz-Signature=/);
+    assert.match(body.messages[0]?.screenshotUrl ?? '', /billing-agent\/conversations\/conv-1\/1\.png/);
   });
 });

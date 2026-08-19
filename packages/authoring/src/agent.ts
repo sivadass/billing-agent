@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Mistral } from '@mistralai/mistralai';
 import type { ContentChunk } from '@mistralai/mistralai/models/components/contentchunk.js';
 import { chromium, type Page } from 'playwright';
 import {
+  createLogger,
   decryptSecret,
+  isObjectStorageConfigured,
   parseMasterKey,
   resolveMistralApiKey,
+  uploadConversationScreenshot,
   validateWorkflow,
 } from '@billing-agent/core';
 import type {
@@ -64,6 +64,11 @@ export type AuthoringDeps = {
     model: string;
     messages: MistralChatMessage[];
   }) => Promise<MistralCompletionResult>;
+  uploadScreenshot: (input: {
+    conversationId: string;
+    body: Buffer;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<string | undefined>;
 };
 
 function extractMessageContent(
@@ -125,6 +130,15 @@ function ownsLock(lock: BrowserLock, conversationId: string): boolean {
 function acquireAuthoringLock(lock: BrowserLock, conversationId: string): boolean {
   if (ownsLock(lock, conversationId)) return true;
   return lock.tryAcquire({ kind: 'authoring', id: conversationId });
+}
+
+async function defaultUploadScreenshot(input: {
+  conversationId: string;
+  body: Buffer;
+  env: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  if (!isObjectStorageConfigured(input.env)) return undefined;
+  return uploadConversationScreenshot(input);
 }
 
 async function defaultLaunchSession(input: {
@@ -244,6 +258,7 @@ async function executeTool(
     conversation: ConversationDocument;
     browser: SettingsDocument['browser'];
     env: NodeJS.ProcessEnv;
+    uploadScreenshot: AuthoringDeps['uploadScreenshot'];
   },
 ): Promise<{ result: string; screenshotPath?: string }> {
   const { page, store, conversation, browser, env } = input;
@@ -252,11 +267,18 @@ async function executeTool(
     case 'snapshot': {
       const tree = await page.locator('body').ariaSnapshot();
       let screenshotPath: string | undefined;
-      if (browser.saveErrorScreenshot) {
-        const dir = join(tmpdir(), 'billing-agent-authoring');
-        await mkdir(dir, { recursive: true });
-        screenshotPath = join(dir, `${conversation.id}-${Date.now()}.png`);
-        await page.screenshot({ path: screenshotPath, fullPage: true });
+      try {
+        const raw = await page.screenshot({ type: 'png', fullPage: true });
+        const body = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+        screenshotPath = await input.uploadScreenshot({
+          conversationId: conversation.id,
+          body,
+          env,
+        });
+      } catch (error) {
+        createLogger(conversation.id).warn('conversation screenshot upload failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return {
         result: JSON.stringify({ tree, screenshotPath: screenshotPath ?? null }),
@@ -407,6 +429,7 @@ export async function handleAuthoringTurn(input: {
   const deps: AuthoringDeps = {
     launchSession: defaultLaunchSession,
     completeWithTools: defaultCompleteWithTools,
+    uploadScreenshot: defaultUploadScreenshot,
     ...input.deps,
   };
 
@@ -550,6 +573,7 @@ export async function handleAuthoringTurn(input: {
           conversation,
           browser: input.browser,
           env: input.env,
+          uploadScreenshot: deps.uploadScreenshot,
         });
         toolResult = executed.result;
         screenshotPath = executed.screenshotPath;

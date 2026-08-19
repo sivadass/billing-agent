@@ -366,13 +366,19 @@ function ChatThread({ conversationId }: { conversationId: string }) {
                 <div
                   className={`${styles.message} ${
                     isUser ? styles['message-user'] : styles['message-assistant']
-                  }`}
+                  } ${message.screenshotUrl ? styles['message-with-screenshot'] : ''}`}
                 >
                   <div className={styles.bubble}>
                     <Typography variant="p" className={styles['bubble-text']}>
                       {message.text}
                     </Typography>
-                    {message.screenshotPath ? (
+                    {message.screenshotUrl ? (
+                      <img
+                        src={message.screenshotUrl}
+                        alt="Page snapshot"
+                        className={styles.screenshot}
+                      />
+                    ) : message.screenshotPath ? (
                       <Typography
                         variant="small"
                         className={styles['message-meta']}

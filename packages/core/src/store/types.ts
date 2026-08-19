@@ -96,7 +96,10 @@ export type ConversationMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
+  /** Persisted B2 object key (or a legacy local path). */
   screenshotPath?: string;
+  /** Derived presigned GET URL; never stored. */
+  screenshotUrl?: string;
   createdAt: string;
 };
 

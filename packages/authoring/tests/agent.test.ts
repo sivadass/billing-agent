@@ -282,6 +282,45 @@ describe('handleAuthoringTurn', () => {
     const updated = await store.getConversation(conversation.id);
     assert.ok(updated?.messages.some((message) => message.role === 'assistant'));
   });
+
+  it('uploads snapshot PNGs and stores the B2 key on the assistant message', async () => {
+    const store = new AuthoringMemoryStore();
+    const conversation = activeConversation();
+    await store.upsertConversation(conversation);
+
+    const uploads: Array<{ conversationId: string; body: Buffer }> = [];
+    let callCount = 0;
+    await runTurn(store, conversation.id, {
+      uploadScreenshot: async ({ conversationId, body }) => {
+        uploads.push({ conversationId, body });
+        return `billing-agent/conversations/${conversationId}/1.png`;
+      },
+      completeWithTools: async (): Promise<MistralCompletionResult> => {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            toolCalls: [{ id: 'tc-snap', name: 'snapshot', arguments: '{}' }],
+          };
+        }
+        return { content: 'I can see the page.' };
+      },
+    });
+
+    const updated = await store.getConversation(conversation.id);
+    assert.ok(updated);
+    assert.equal(uploads.length, 1);
+    assert.equal(uploads[0]?.conversationId, conversation.id);
+    assert.deepEqual(uploads[0]?.body, Buffer.from('png'));
+    const snapshotMessage = updated.messages.find(
+      (message) => message.screenshotPath !== undefined,
+    );
+    assert.ok(snapshotMessage);
+    assert.equal(snapshotMessage.text, 'Captured a page snapshot.');
+    assert.equal(
+      snapshotMessage.screenshotPath,
+      `billing-agent/conversations/${conversation.id}/1.png`,
+    );
+  });
 });
 
 describe('expireStaleAuthoringSessions', () => {

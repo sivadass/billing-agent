@@ -280,6 +280,34 @@ describe('Chat session layout', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
   });
 
+  it('renders a screenshot image when the message has a signed URL', async () => {
+    vi.mocked(conversationsApi.getConversation).mockResolvedValue(
+      conversation({
+        messages: [
+          {
+            id: 'm-snap',
+            role: 'assistant',
+            text: 'Captured a page snapshot.',
+            screenshotPath: 'billing-agent/conversations/conv-1/1.png',
+            screenshotUrl: 'https://b2.example/signed.png',
+            createdAt: '2026-08-17T12:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const image = await screen.findByRole('img', { name: 'Page snapshot' });
+    expect(image).toHaveAttribute('src', 'https://b2.example/signed.png');
+  });
+
   it('shows a working state while waiting for the first assistant reply', async () => {
     vi.mocked(conversationsApi.getConversation).mockResolvedValue(
       conversation({ messages: [] }),
