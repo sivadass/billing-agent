@@ -349,3 +349,83 @@ describe('conversation API state machine', () => {
     assert.deepEqual(await response.json(), { error: 'Authoring unavailable' });
   });
 });
+
+describe('GET /conversations', () => {
+  it('returns the caller summaries newest-first and omits messages and drafts', async () => {
+    const { handle, store, user, token } = await setupServer();
+    const older = confirmingConversation(user.id, {
+      id: 'conv-older',
+      status: 'saved',
+      jobId: 'job-1',
+      goal: 'Older goal',
+      messages: [{ id: 'm1', role: 'assistant', text: 'done', createdAt: '2026-08-01T00:00:00.000Z' }],
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    });
+    const newer = confirmingConversation(user.id, {
+      id: 'conv-newer',
+      status: 'active',
+      goal: 'Newer goal',
+      messages: [{ id: 'm2', role: 'user', text: 'hello', createdAt: '2026-08-02T00:00:00.000Z' }],
+      updatedAt: '2026-08-02T00:00:00.000Z',
+    });
+    await store.upsertConversation(older);
+    await store.upsertConversation(newer);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/conversations`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as Array<Record<string, unknown>>;
+    assert.equal(body.length, 2);
+    assert.equal(body[0]?.id, 'conv-newer');
+    assert.equal(body[1]?.id, 'conv-older');
+    assert.deepEqual(body[0], {
+      id: 'conv-newer',
+      status: 'active',
+      goal: 'Newer goal',
+      startUrl: 'https://sivadass.in/',
+      jobId: null,
+      createdAt: newer.createdAt,
+      updatedAt: '2026-08-02T00:00:00.000Z',
+    });
+    assert.equal(body[0]?.messages, undefined);
+    assert.equal('draftWorkflow' in body[0]!, false);
+    assert.equal('draftSchema' in body[0]!, false);
+    assert.equal('draftExtract' in body[0]!, false);
+    assert.equal('draftNotify' in body[0]!, false);
+    assert.equal('draftSchedule' in body[0]!, false);
+    assert.equal('userId' in body[0]!, false);
+  });
+
+  it('excludes another user conversation from the list', async () => {
+    const { handle, store, user, token } = await setupServer();
+    await store.upsertConversation(
+      confirmingConversation(user.id, { id: 'mine', goal: 'Mine' }),
+    );
+    const other = await createUser(store, 'other@example.com', 'other-password');
+    await store.upsertConversation(
+      confirmingConversation(other.id, { id: 'theirs', goal: 'Theirs' }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/conversations`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as Array<{ id: string }>;
+    assert.deepEqual(
+      body.map((row) => row.id),
+      ['mine'],
+    );
+  });
+
+  it('does not treat GET /conversations as GET /conversations/:id', async () => {
+    const { handle, token } = await setupServer();
+    const response = await fetch(`http://127.0.0.1:${handle.port}/conversations`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), []);
+  });
+});

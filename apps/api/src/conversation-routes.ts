@@ -188,6 +188,39 @@ function toConversationResponse(
   return { ...conversation, messages };
 }
 
+type ConversationSummaryResponse = {
+  id: string;
+  status: ConversationDocument['status'];
+  goal: string | null;
+  startUrl: string | null;
+  jobId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function toConversationSummary(
+  conversation: ConversationDocument,
+): ConversationSummaryResponse {
+  return {
+    id: conversation.id,
+    status: conversation.status,
+    goal: conversation.goal,
+    startUrl: conversation.startUrl,
+    jobId: conversation.jobId,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+  };
+}
+
+async function handleListConversations(
+  res: ServerResponse,
+  ctx: ConversationRouteContext,
+  userId: string,
+): Promise<void> {
+  const conversations = await ctx.store.listConversations({ userId });
+  sendJson(res, 200, conversations.map(toConversationSummary));
+}
+
 async function getOwnedConversation(
   store: BillingStore,
   conversationId: string,
@@ -563,6 +596,11 @@ export async function handleConversationRoutes(
   pathname: string,
   method: string,
 ): Promise<boolean> {
+  if (method === 'GET' && pathname === '/conversations') {
+    await handleListConversations(res, ctx, userId);
+    return true;
+  }
+
   if (method === 'POST' && pathname === '/conversations') {
     await handleCreateConversation(req, res, ctx, userId);
     return true;
