@@ -22,6 +22,7 @@ import {
   postConversationSecrets,
   rejectConversationDraft,
 } from '../lib/conversations-api';
+import { conversationStatusVariant } from '../lib/conversation-status';
 import type { ConversationDocument, NotifyChannel } from '../lib/types';
 import styles from './chat-page.module.scss';
 
@@ -32,17 +33,6 @@ const CHANNEL_OPTIONS: Array<{ label: string; value: NotifyChannel['type'] }> = 
   { label: 'ntfy', value: 'ntfy' },
   { label: 'Webhook', value: 'webhook' },
 ];
-
-function statusVariant(
-  status: ConversationDocument['status'],
-): 'success' | 'warning' | 'error' | 'default' {
-  if (status === 'saved') return 'success';
-  if (status === 'active' || status === 'confirming' || status === 'awaiting_secret') {
-    return 'warning';
-  }
-  if (status === 'expired' || status === 'abandoned') return 'error';
-  return 'default';
-}
 
 function ChatComposer() {
   const navigate = useNavigate();
@@ -321,7 +311,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
 
       <Container className={styles.meta} padding="4" margin="t-3" showBorder>
-        <Badge label={conversation.status} variant={statusVariant(conversation.status)} />
+        <Badge label={conversation.status} variant={conversationStatusVariant(conversation.status)} />
         {isPollingConversationStatus(conversation.status) ? (
           <Typography variant="small" className={styles['polling-hint']}>
             Auto-refreshing every 2s
