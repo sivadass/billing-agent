@@ -5,10 +5,12 @@ import {
   Container,
   FeedbackState,
   FormControls,
+  Icon,
   PageHeader,
   Typography,
 } from 'cleanplate';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ConversationsTable } from '../components/conversations-table';
 import { Loader } from '../components/loader';
@@ -25,6 +27,11 @@ import {
   rejectConversationDraft,
 } from '../lib/conversations-api';
 import { conversationStatusVariant } from '../lib/conversation-status';
+import {
+  formatClockTime,
+  formatDateHeading,
+  isSameLocalDay,
+} from '../lib/timestamp-humanize';
 import type { ConversationDocument, ConversationSummary, NotifyChannel } from '../lib/types';
 import styles from './chat-page.module.scss';
 
@@ -166,6 +173,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   const [messageText, setMessageText] = useState('');
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [isBusy, setIsBusy] = useState(false);
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const loadConversation = useCallback(async () => {
     setError(null);
@@ -209,6 +217,10 @@ function ChatThread({ conversationId }: { conversationId: string }) {
       return next;
     });
   }, [secretKeys]);
+
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [conversation?.messages.length, isBusy]);
 
   const handleSendMessage = async () => {
     if (!messageText.trim()) return;
@@ -298,155 +310,214 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   const draftEntries = conversation.draftExtract
     ? Object.entries(conversation.draftExtract)
     : [];
+  const lastMessage = conversation.messages[conversation.messages.length - 1];
+  const isAwaitingReply =
+    isBusy ||
+    (isPollingConversationStatus(conversation.status) &&
+      (conversation.messages.length === 0 || lastMessage?.role === 'user'));
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleSendMessage();
+    }
+  };
 
   return (
-    <>
-      <PageHeader
-        title="Chat session"
-        subtitle={conversation.goal ?? conversation.startUrl ?? conversationId}
-        primaryCta={
-          <Button variant="outline" onClick={() => void handleAbandon()} disabled={isBusy}>
-            Abandon
-          </Button>
-        }
-      />
-      {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
-
-      <Container className={styles.meta} padding="4" margin="t-3" showBorder>
-        <Badge label={conversation.status} variant={conversationStatusVariant(conversation.status)} />
-        {isPollingConversationStatus(conversation.status) ? (
-          <Typography variant="small" className={styles['polling-hint']}>
-            Auto-refreshing every 2s
-          </Typography>
-        ) : null}
-      </Container>
-
-      <Container className={styles.thread} padding="4" margin="t-3" showBorder>
-        {conversation.messages.length === 0 ? (
-          <Typography variant="p" className={styles.muted}>
-            Waiting for the agent to respond…
-          </Typography>
-        ) : (
-          conversation.messages.map((message) => (
-            <div
-              key={message.id}
-              className={
-                message.role === 'user'
-                  ? styles['message-user']
-                  : styles['message-assistant']
-              }
-            >
-              <Typography variant="small" className={styles['message-role']}>
-                {message.role}
-              </Typography>
-              <Typography variant="p" margin="t-1">
-                {message.text}
-              </Typography>
-              {message.screenshotPath ? (
-                <Typography variant="small" className={styles['screenshot-path']} margin="t-2">
-                  Screenshot: {message.screenshotPath}
-                </Typography>
-              ) : null}
-            </div>
-          ))
-        )}
-      </Container>
-
-      {conversation.status === 'awaiting_secret' ? (
-        <Container className={styles.panel} padding="4" margin="t-3" showBorder>
-          <Typography variant="h4" margin="b-3">
-            Secrets required
-          </Typography>
-          {secretKeys.map((key) => (
-            <FormControls.Input
-              key={key}
-              label={key}
-              type={/password|secret|token/i.test(key) ? 'password' : 'text'}
-              value={secretValues[key] ?? ''}
-              onChange={(event) =>
-                setSecretValues((current) => ({ ...current, [key]: event.target.value }))
-              }
-              isFluid
-              margin={key === secretKeys[0] ? '0' : 't-3'}
-            />
-          ))}
-          <Container display="flex" gap="2" padding="0" margin="t-4">
-            <Button variant="solid" onClick={() => void handleSubmitSecrets()} disabled={isBusy}>
-              Submit secrets
+    <div className={styles.session}>
+      <div className={styles['session-header']}>
+        <PageHeader
+          title="Chat session"
+          subtitle={conversation.goal ?? conversation.startUrl ?? conversationId}
+          primaryCta={
+            <Button variant="outline" onClick={() => void handleAbandon()} disabled={isBusy}>
+              Abandon
             </Button>
-          </Container>
-        </Container>
-      ) : null}
+          }
+        />
+        {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
 
-      {conversation.status === 'confirming' ? (
-        <Container className={styles.panel} padding="4" margin="t-3" showBorder>
-          <Typography variant="h4" margin="b-3">
-            Confirm proposed job
-          </Typography>
-          {draftEntries.length > 0 ? (
-            <div className={styles['sample-grid']}>
-              {draftEntries.map(([key, value]) => (
-                <div key={key} className={styles['sample-row']}>
-                  <Typography variant="small">{key}</Typography>
-                  <Typography variant="p" margin="0">
-                    {String(value)}
+        <Container className={styles.meta} padding="0" margin="t-3">
+          <Badge label={conversation.status} variant={conversationStatusVariant(conversation.status)} />
+          {isPollingConversationStatus(conversation.status) ? (
+            <Typography variant="small" className={styles['polling-hint']}>
+              {isAwaitingReply ? 'Agent is working…' : 'Live · updates every 2s'}
+            </Typography>
+          ) : null}
+        </Container>
+      </div>
+
+      <div className={styles['session-body']}>
+        <div className={styles.thread}>
+          {conversation.messages.map((message, index) => {
+            const previous = conversation.messages[index - 1];
+            const showDay =
+              !previous || !isSameLocalDay(previous.createdAt, message.createdAt);
+            const isUser = message.role === 'user';
+            return (
+              <Fragment key={message.id}>
+                {showDay ? (
+                  <div className={styles['day-separator']}>
+                    <Typography variant="small" className={styles['day-label']}>
+                      {formatDateHeading(message.createdAt)}
+                    </Typography>
+                  </div>
+                ) : null}
+                <div
+                  className={`${styles.message} ${
+                    isUser ? styles['message-user'] : styles['message-assistant']
+                  }`}
+                >
+                  <div className={styles.bubble}>
+                    <Typography variant="p" className={styles['bubble-text']}>
+                      {message.text}
+                    </Typography>
+                    {message.screenshotPath ? (
+                      <Typography
+                        variant="small"
+                        className={styles['message-meta']}
+                        margin="t-2"
+                        title={message.screenshotPath}
+                      >
+                        Screenshot attached
+                      </Typography>
+                    ) : null}
+                  </div>
+                  <Typography variant="small" className={styles['message-meta']}>
+                    {formatClockTime(message.createdAt)}
                   </Typography>
                 </div>
-              ))}
+              </Fragment>
+            );
+          })}
+          {isAwaitingReply ? (
+            <div
+              className={`${styles.message} ${styles['message-assistant']}`}
+              aria-live="polite"
+            >
+              <div className={`${styles.bubble} ${styles.waiting}`}>
+                <Loader size={20} aria-label="Agent is working" />
+                <Typography variant="p" className={styles['bubble-text']} margin="0">
+                  Working…
+                </Typography>
+              </div>
             </div>
-          ) : (
-            <Typography variant="p" className={styles.muted}>
-              No sample extract yet.
+          ) : null}
+          <div ref={threadEndRef} />
+        </div>
+
+        {conversation.status === 'awaiting_secret' ? (
+          <Container className={styles.panel} padding="4" showBorder>
+            <Typography variant="h4" margin="b-3">
+              Secrets required
             </Typography>
-          )}
-          <Container display="flex" gap="2" padding="0" margin="t-4">
-            <Button variant="solid" onClick={() => void handleConfirm()} disabled={isBusy}>
-              Confirm job
-            </Button>
-            <Button variant="outline" onClick={() => void handleKeepGoing()} disabled={isBusy}>
-              Keep going
+            {secretKeys.map((key) => (
+              <FormControls.Input
+                key={key}
+                label={key}
+                type={/password|secret|token/i.test(key) ? 'password' : 'text'}
+                value={secretValues[key] ?? ''}
+                onChange={(event) =>
+                  setSecretValues((current) => ({ ...current, [key]: event.target.value }))
+                }
+                isFluid
+                margin={key === secretKeys[0] ? '0' : 't-3'}
+              />
+            ))}
+            <Container display="flex" gap="2" padding="0" margin="t-4">
+              <Button variant="solid" onClick={() => void handleSubmitSecrets()} disabled={isBusy}>
+                Submit secrets
+              </Button>
+            </Container>
+          </Container>
+        ) : null}
+
+        {conversation.status === 'confirming' ? (
+          <Container className={styles.panel} padding="4" showBorder>
+            <Typography variant="h4" margin="b-3">
+              Confirm proposed job
+            </Typography>
+            {draftEntries.length > 0 ? (
+              <div className={styles['sample-grid']}>
+                {draftEntries.map(([key, value]) => (
+                  <div key={key} className={styles['sample-row']}>
+                    <Typography variant="small">{key}</Typography>
+                    <Typography variant="p" margin="0">
+                      {String(value)}
+                    </Typography>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Typography variant="p" className={styles['message-meta']}>
+                No sample extract yet.
+              </Typography>
+            )}
+            <Container display="flex" gap="2" padding="0" margin="t-4">
+              <Button variant="solid" onClick={() => void handleConfirm()} disabled={isBusy}>
+                Confirm job
+              </Button>
+              <Button variant="outline" onClick={() => void handleKeepGoing()} disabled={isBusy}>
+                Keep going
+              </Button>
+            </Container>
+          </Container>
+        ) : null}
+
+        {conversation.status === 'saved' && conversation.jobId ? (
+          <Container className={styles.panel} padding="4" showBorder>
+            <Typography variant="p" margin="b-3">
+              Job saved. You can run it from the Jobs hub.
+            </Typography>
+            <Button variant="solid" onClick={() => navigate(`/jobs/${conversation.jobId}`)}>
+              Open job
             </Button>
           </Container>
-        </Container>
-      ) : null}
+        ) : null}
 
-      {conversation.status === 'saved' && conversation.jobId ? (
-        <Container padding="4" margin="t-3" showBorder>
-          <Typography variant="p" margin="b-3">
-            Job saved. You can run it from the Jobs hub.
-          </Typography>
-          <Button variant="solid" onClick={() => navigate(`/jobs/${conversation.jobId}`)}>
-            Open job
-          </Button>
-        </Container>
-      ) : null}
-
-      {conversation.status === 'expired' || conversation.status === 'abandoned' ? (
-        <FeedbackState
-          variant="empty"
-          margin="t-4"
-          title={conversation.status === 'expired' ? 'Session expired' : 'Session abandoned'}
-          description="Start a new chat to author another job."
-          primaryAction={{ label: 'New chat', onClick: () => navigate('/chat') }}
-        />
-      ) : null}
+        {conversation.status === 'expired' || conversation.status === 'abandoned' ? (
+          <FeedbackState
+            variant="empty"
+            title={conversation.status === 'expired' ? 'Session expired' : 'Session abandoned'}
+            description="Start a new chat to author another job."
+            primaryAction={{ label: 'New chat', onClick: () => navigate('/chat') }}
+          />
+        ) : null}
+      </div>
 
       {conversation.status === 'active' ? (
-        <Container className={styles.composer} padding="4" margin="t-3" showBorder>
-          <FormControls.Input
-            label="Message"
-            value={messageText}
-            onChange={(event) => setMessageText(event.target.value)}
-            isFluid
-          />
-          <Container display="flex" gap="2" padding="0" margin="t-3">
-            <Button variant="solid" onClick={() => void handleSendMessage()} disabled={isBusy}>
-              Send
+        <form
+          className={styles['composer-dock']}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSendMessage();
+          }}
+        >
+          <div className={styles['composer-pill']}>
+            <textarea
+              className={styles['composer-input']}
+              value={messageText}
+              onChange={(event) => setMessageText(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              placeholder="Message"
+              aria-label="Message"
+              disabled={isBusy}
+              rows={1}
+            />
+            <Button
+              className={styles['composer-send']}
+              variant="icon"
+              type="submit"
+              aria-label="Send"
+              isLoading={isBusy}
+              isDisabled={isBusy || !messageText.trim()}
+            >
+              <Icon name="arrow_upward" color="white" size="small" />
             </Button>
-          </Container>
-        </Container>
+          </div>
+        </form>
       ) : null}
-    </>
+    </div>
   );
 }
 

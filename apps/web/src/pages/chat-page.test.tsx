@@ -61,6 +61,10 @@ const flushAsync = async () => {
   });
 };
 
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
 describe('ChatPage polling', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -251,5 +255,45 @@ describe('Chat list', () => {
     const newChatButtons = screen.getAllByRole('button', { name: /new chat/i });
     fireEvent.click(newChatButtons[0]!);
     expect(await screen.findByText('Composer route')).toBeInTheDocument();
+  });
+});
+
+describe('Chat session layout', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders bubbles without role labels and a sticky send field', async () => {
+    vi.mocked(conversationsApi.getConversation).mockResolvedValue(conversation());
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Working on it…')).toBeInTheDocument();
+    expect(screen.queryByText('assistant')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+  });
+
+  it('shows a working state while waiting for the first assistant reply', async () => {
+    vi.mocked(conversationsApi.getConversation).mockResolvedValue(
+      conversation({ messages: [] }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Working…')).toBeInTheDocument();
+    expect(screen.getByText('Agent is working…')).toBeInTheDocument();
   });
 });
