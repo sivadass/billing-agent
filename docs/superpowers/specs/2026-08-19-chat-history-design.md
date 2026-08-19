@@ -79,6 +79,76 @@ Browser (Vite SPA)                         API
 
 Sidebar **Chat** stays `/chat`. `/chat/new` must be a concrete route so `new` is never parsed as a conversation id.
 
+## Screen layout
+
+AppShell is unchanged: left nav Jobs / Chat / Runs / Status. Chat is selected on every screen below. Header avatar stays on the right.
+
+### `/chat` — history list
+
+```text
+┌──────────┬─────────────────────────────────────────────────────┐
+│ Billing  │  Chat                              [ New chat ]     │
+│ Agent    │  Reopen a session to continue or abandon it.        │
+│          ├─────────────────────────────────────────────────────┤
+│ Jobs     │  Goal                 Status      Start URL  Updated│
+│ Chat  ●  │  Grab contact email   active      sivadass.in    2m │
+│ Runs     │  Draft TNEB job       confirming  tnebnet.org    1h │
+│ Status   │  Saved contact scrape saved       sivadass.in    1d │
+│          │                                                     │
+│          │  row click → /chat/:id   (no row actions)           │
+└──────────┴─────────────────────────────────────────────────────┘
+```
+
+Empty list (successful fetch, zero rows):
+
+```text
+┌──────────┬─────────────────────────────────────────────────────┐
+│ …        │  Chat                              [ New chat ]     │
+│ Chat  ●  ├─────────────────────────────────────────────────────┤
+│ …        │                                                     │
+│          │           No chats yet                              │
+│          │           [ New chat ]                              │
+│          │                                                     │
+└──────────┴─────────────────────────────────────────────────────┘
+```
+
+### `/chat/new` — composer
+
+```text
+┌──────────┬─────────────────────────────────────────────────────┐
+│ Billing  │  New chat                                           │
+│ Agent    │  Describe a site and goal; the agent proposes a job.│
+│          ├─────────────────────────────────────────────────────┤
+│ Jobs     │  Start URL                                          │
+│ Chat  ●  │  [ https://sivadass.in/                           ] │
+│ Runs     │  Goal                                               │
+│ Status   │  [ Grab the contact email address                 ] │
+│          │  Schedule (cron, optional)                          │
+│          │  [                                                ] │
+│          │  Notify title / channel                             │
+│          │  [ Start chat                                     ] │
+└──────────┴─────────────────────────────────────────────────────┘
+```
+
+Submit `replace`s to `/chat/:id`. No history table on this screen.
+
+### `/chat/:id` — session (unchanged)
+
+```text
+┌──────────┬─────────────────────────────────────────────────────┐
+│ Billing  │  Chat session                      [ Abandon ]      │
+│ Agent    │  Grab the contact email address                     │
+│          ├─────────────────────────────────────────────────────┤
+│ Jobs     │  [active]  Auto-refreshing every 2s                 │
+│ Chat  ●  │                                                     │
+│ Runs     │  ASSISTANT  Browser is busy with another session.   │
+│ Status   │                                                     │
+│          │  Message  [                                   ] Send│
+└──────────┴─────────────────────────────────────────────────────┘
+```
+
+**Abandon** returns to `/chat` (the list). Operator finds the holding session in that list, opens it, and abandons there.
+
 ## API
 
 ### `GET /conversations`
