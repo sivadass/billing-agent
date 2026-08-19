@@ -263,7 +263,7 @@ describe('Chat session layout', () => {
     vi.clearAllMocks();
   });
 
-  it('renders bubbles without role labels and a sticky send field', async () => {
+  it('renders bubbles without role labels and a send field', async () => {
     vi.mocked(conversationsApi.getConversation).mockResolvedValue(conversation());
 
     render(

@@ -64,6 +64,7 @@ export function ConversationsTable({ conversations, onSelect }: ConversationsTab
       onRowClick={(raw) => onSelect((raw as ConversationsTableRow).conversation)}
       mobileColumns={{
         title: 'goal',
+        mediaAvatar: 'goal',
         subtitle: (raw) => (raw as ConversationsTableRow).startUrl,
         meta: (raw) => {
           const row = raw as ConversationsTableRow;

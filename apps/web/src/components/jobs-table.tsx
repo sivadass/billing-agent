@@ -166,6 +166,7 @@ export function JobsTable({
         data={rows}
         mobileColumns={{
           title: 'id',
+          mediaAvatar: 'id',
           subtitle: (raw) => {
             const row = raw as JobsTableRow;
             return `${row.engine} · ${row.scheduleLabel}`;

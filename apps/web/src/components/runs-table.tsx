@@ -85,6 +85,7 @@ export function RunsTable({ runs, onSelectRun }: RunsTableProps) {
       onRowClick={(raw) => onSelectRun((raw as RunsTableRow).run)}
       mobileColumns={{
         title: 'id',
+        mediaAvatar: 'id',
         subtitle: (raw) => {
           const row = raw as RunsTableRow;
           return `${row.jobId} · ${row.engine}`;
