@@ -10,6 +10,7 @@ import {
 } from 'cleanplate';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { ConversationsTable } from '../components/conversations-table';
 import { Loader } from '../components/loader';
 import {
   abandonConversation,
@@ -17,13 +18,14 @@ import {
   createConversation,
   getConversation,
   isPollingConversationStatus,
+  listConversations,
   parseSecretKeysFromMessages,
   postConversationMessage,
   postConversationSecrets,
   rejectConversationDraft,
 } from '../lib/conversations-api';
 import { conversationStatusVariant } from '../lib/conversation-status';
-import type { ConversationDocument, NotifyChannel } from '../lib/types';
+import type { ConversationDocument, ConversationSummary, NotifyChannel } from '../lib/types';
 import styles from './chat-page.module.scss';
 
 const DEFAULT_START_URL = 'https://sivadass.in/';
@@ -34,7 +36,7 @@ const CHANNEL_OPTIONS: Array<{ label: string; value: NotifyChannel['type'] }> = 
   { label: 'Webhook', value: 'webhook' },
 ];
 
-function ChatComposer() {
+export function ChatComposer() {
   const navigate = useNavigate();
   const [startUrl, setStartUrl] = useState(DEFAULT_START_URL);
   const [goal, setGoal] = useState(DEFAULT_GOAL);
@@ -86,7 +88,7 @@ function ChatComposer() {
   return (
     <>
       <PageHeader
-        title="Chat"
+        title="New chat"
         subtitle="Describe a site and goal; the agent proposes a replayable workflow job."
       />
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
@@ -448,8 +450,70 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   );
 }
 
+export function ChatListPage() {
+  const navigate = useNavigate();
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+    void listConversations()
+      .then((items) => {
+        if (!cancelled) setConversations(items);
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load chats');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <>
+      <PageHeader
+        title="Chat"
+        subtitle="Reopen a session to continue or abandon it."
+        primaryCta={
+          <Button variant="solid" onClick={() => navigate('/chat/new')}>
+            New chat
+          </Button>
+        }
+      />
+      {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
+      {isLoading ? (
+        <div className={styles['loading-state']}>
+          <Loader size={56} />
+        </div>
+      ) : null}
+      {!isLoading && !error && conversations.length === 0 ? (
+        <FeedbackState
+          variant="empty"
+          margin="t-5"
+          title="No chats yet"
+          primaryAction={{ label: 'New chat', onClick: () => navigate('/chat/new') }}
+        />
+      ) : null}
+      {!isLoading && !error && conversations.length > 0 ? (
+        <ConversationsTable
+          conversations={conversations}
+          onSelect={(conversation) => navigate(`/chat/${conversation.id}`)}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function ChatPage() {
   const { conversationId } = useParams<{ conversationId?: string }>();
-  if (!conversationId) return <ChatComposer />;
+  if (!conversationId) return <ChatListPage />;
   return <ChatThread conversationId={conversationId} />;
 }

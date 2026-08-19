@@ -2,6 +2,7 @@ import { ApiClientError, apiFetch } from './api-client';
 import type {
   ConversationDocument,
   ConversationStatus,
+  ConversationSummary,
   CreateConversationInput,
   ConfirmConversationResponse,
 } from './types';
@@ -28,6 +29,12 @@ async function throwForNonOk(response: Response): Promise<void> {
 
 export function isPollingConversationStatus(status: ConversationStatus): boolean {
   return status === 'active' || status === 'awaiting_secret' || status === 'confirming';
+}
+
+export async function listConversations(): Promise<ConversationSummary[]> {
+  const response = await apiFetch('/conversations');
+  await throwForNonOk(response);
+  return parseJson<ConversationSummary[]>(response);
 }
 
 export async function createConversation(

@@ -2,12 +2,13 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as conversationsApi from '../lib/conversations-api';
-import type { ConversationDocument } from '../lib/types';
-import { ChatPage } from './chat-page';
+import type { ConversationDocument, ConversationSummary } from '../lib/types';
+import { ChatComposer, ChatListPage, ChatPage } from './chat-page';
 
 vi.mock('../lib/conversations-api', () => ({
   createConversation: vi.fn(),
   getConversation: vi.fn(),
+  listConversations: vi.fn(),
   postConversationMessage: vi.fn(),
   postConversationSecrets: vi.fn(),
   confirmConversation: vi.fn(),
@@ -34,6 +35,20 @@ function conversation(overrides: Partial<ConversationDocument> = {}): Conversati
     draftExtract: null,
     draftNotify: null,
     draftSchedule: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function summary(overrides: Partial<ConversationSummary> = {}): ConversationSummary {
+  const now = '2026-08-17T12:00:00.000Z';
+  return {
+    id: 'conv-1',
+    status: 'active',
+    goal: 'Grab the contact email address',
+    startUrl: 'https://sivadass.in/',
+    jobId: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -161,14 +176,80 @@ describe('ChatPage composer', () => {
 
   it('prefills the canonical sivadass example', async () => {
     render(
-      <MemoryRouter initialEntries={['/chat']}>
+      <MemoryRouter initialEntries={['/chat/new']}>
         <Routes>
-          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/chat/new" element={<ChatComposer />} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByDisplayValue('https://sivadass.in/')).toBeInTheDocument();
     expect(screen.getAllByDisplayValue('Grab the contact email address').length).toBeGreaterThan(0);
+  });
+});
+
+describe('Chat list', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('lists conversations and navigates to a session on row click', async () => {
+    vi.mocked(conversationsApi.listConversations).mockResolvedValue([
+      summary(),
+      summary({
+        id: 'conv-2',
+        status: 'saved',
+        goal: 'Draft TNEB job',
+        startUrl: 'https://www.tnebnet.org/awp/login',
+      }),
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <Routes>
+          <Route path="/chat" element={<ChatListPage />} />
+          <Route path="/chat/:conversationId" element={<div>Session conv-1</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Grab the contact email address')).toBeInTheDocument();
+    expect(screen.getByText('Draft TNEB job')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Grab the contact email address'));
+    expect(await screen.findByText('Session conv-1')).toBeInTheDocument();
+  });
+
+  it('navigates to the composer from New chat', async () => {
+    vi.mocked(conversationsApi.listConversations).mockResolvedValue([summary()]);
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <Routes>
+          <Route path="/chat" element={<ChatListPage />} />
+          <Route path="/chat/new" element={<div>Composer route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /new chat/i }));
+    expect(await screen.findByText('Composer route')).toBeInTheDocument();
+  });
+
+  it('shows an empty state when there are no chats', async () => {
+    vi.mocked(conversationsApi.listConversations).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <Routes>
+          <Route path="/chat" element={<ChatListPage />} />
+          <Route path="/chat/new" element={<div>Composer route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('No chats yet')).toBeInTheDocument();
+    const newChatButtons = screen.getAllByRole('button', { name: /new chat/i });
+    fireEvent.click(newChatButtons[0]!);
+    expect(await screen.findByText('Composer route')).toBeInTheDocument();
   });
 });

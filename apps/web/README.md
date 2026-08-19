@@ -10,6 +10,9 @@ The app is organized into hubs under a router shell:
 - `/jobs` - list jobs, run now, edit, soft-disable/enable
 - `/jobs/new` - points at chat, which is where new jobs are created
 - `/jobs/:jobId` - edit job
+- `/chat` - conversation history; row opens a session
+- `/chat/new` - start a new authoring chat
+- `/chat/:conversationId` - chat session (Abandon releases the browser if this session holds it)
 - `/runs` - list/filter runs
 - `/runs/:runId` - run detail with polling while status is `running`
 - `/status` - API health/auth probes

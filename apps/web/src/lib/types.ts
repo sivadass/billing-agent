@@ -60,6 +60,16 @@ export type ConversationStatus =
   | 'abandoned'
   | 'expired';
 
+export type ConversationSummary = {
+  id: string;
+  status: ConversationStatus;
+  goal: string | null;
+  startUrl: string | null;
+  jobId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ConversationMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';

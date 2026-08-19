@@ -12,7 +12,7 @@ import { ProtectedRoute } from './components/protected-route';
 import { UserAccountMenu } from './components/user-account-menu';
 import { clearAccessToken } from './lib/auth-token';
 import { JobFormPage } from './pages/job-form-page';
-import { ChatPage } from './pages/chat-page';
+import { ChatComposer, ChatListPage, ChatPage } from './pages/chat-page';
 import { JobsPage } from './pages/jobs-page';
 import { LoginPage } from './pages/login-page';
 import { RunDetailPage } from './pages/run-detail-page';
@@ -38,7 +38,8 @@ export function App() {
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/jobs/new" element={<JobFormPage />} />
             <Route path="/jobs/:jobId" element={<JobFormPage />} />
-            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/chat" element={<ChatListPage />} />
+            <Route path="/chat/new" element={<ChatComposer />} />
             <Route path="/chat/:conversationId" element={<ChatPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:runId" element={<RunDetailPage />} />
