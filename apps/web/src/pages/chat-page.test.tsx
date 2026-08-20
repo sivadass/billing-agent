@@ -281,6 +281,35 @@ describe('Chat list', () => {
   });
 });
 
+describe('Chat session abandon', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('confirms before abandoning', async () => {
+    vi.mocked(conversationsApi.getConversation).mockResolvedValue(conversation());
+    vi.mocked(conversationsApi.abandonConversation).mockResolvedValue(
+      conversation({ status: 'abandoned' }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat" element={<div>Chat list</div>} />
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Grab the contact email address');
+    fireEvent.click(screen.getByRole('button', { name: /more options/i }));
+    fireEvent.click(await screen.findByText('Abandon'));
+    expect(screen.getByText('Abandon chat?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Abandon$/i }));
+    expect(conversationsApi.abandonConversation).toHaveBeenCalledWith('conv-1');
+  });
+});
+
 describe('Chat session layout', () => {
   afterEach(() => {
     vi.clearAllMocks();

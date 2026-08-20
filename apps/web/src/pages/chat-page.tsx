@@ -1,6 +1,7 @@
 import {
   Alert,
   Button,
+  ConfirmDialog,
   Container,
   FeedbackState,
   FormControls,
@@ -537,6 +538,19 @@ function ChatThread({ conversationId }: { conversationId: string }) {
           </form>
         ) : null}
       </div>
+      <ConfirmDialog
+        isOpen={abandonOpen}
+        title="Abandon chat?"
+        description="This ends the session. You can start a new chat later."
+        primaryButtonLabel="Abandon"
+        secondaryButtonLabel="Cancel"
+        variant="warning"
+        onClose={() => setAbandonOpen(false)}
+        onPrimaryButtonClick={() => {
+          setAbandonOpen(false);
+          void handleAbandon();
+        }}
+      />
     </div>
   );
 }
