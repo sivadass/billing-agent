@@ -6,9 +6,12 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { ConversationMessage } from './store/types.js';
 
-const SCREENSHOT_KEY_PREFIX = 'billing-agent/conversations/';
-const SCREENSHOT_KEY_PATTERN =
+const CONVERSATION_SCREENSHOT_PREFIX = 'billing-agent/conversations/';
+const RUN_SCREENSHOT_PREFIX = 'billing-agent/runs/';
+const CONVERSATION_SCREENSHOT_KEY_PATTERN =
   /^billing-agent\/conversations\/[A-Za-z0-9._-]+\/\d+\.png$/;
+const RUN_SCREENSHOT_KEY_PATTERN =
+  /^billing-agent\/runs\/[A-Za-z0-9._-]+\/\d+\.png$/;
 
 export type B2Config = {
   accessKeyId: string | undefined;
@@ -110,11 +113,19 @@ export function conversationScreenshotKey(
   conversationId: string,
   now = Date.now(),
 ): string {
-  return `${SCREENSHOT_KEY_PREFIX}${sanitizeId(conversationId)}/${now}.png`;
+  return `${CONVERSATION_SCREENSHOT_PREFIX}${sanitizeId(conversationId)}/${now}.png`;
 }
 
 export function isConversationScreenshotKey(key: string): boolean {
-  return SCREENSHOT_KEY_PATTERN.test(key);
+  return CONVERSATION_SCREENSHOT_KEY_PATTERN.test(key);
+}
+
+export function runScreenshotKey(runId: string, now = Date.now()): string {
+  return `${RUN_SCREENSHOT_PREFIX}${sanitizeId(runId)}/${now}.png`;
+}
+
+export function isRunScreenshotKey(key: string): boolean {
+  return RUN_SCREENSHOT_KEY_PATTERN.test(key);
 }
 
 export async function uploadObject(input: {
@@ -141,6 +152,21 @@ export async function uploadConversationScreenshot(input: {
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const key = conversationScreenshotKey(input.conversationId);
+  await uploadObject({
+    key,
+    body: input.body,
+    contentType: 'image/png',
+    env: input.env,
+  });
+  return key;
+}
+
+export async function uploadRunScreenshot(input: {
+  runId: string;
+  body: Buffer;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const key = runScreenshotKey(input.runId);
   await uploadObject({
     key,
     body: input.body,
@@ -181,4 +207,17 @@ export async function signConversationScreenshots(
       }
     }),
   );
+}
+
+export async function signRunScreenshot(
+  screenshotPath: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  if (!screenshotPath || !isObjectStorageConfigured(env)) return undefined;
+  if (!isRunScreenshotKey(screenshotPath)) return undefined;
+  try {
+    return await presignGet({ key: screenshotPath, env });
+  } catch {
+    return undefined;
+  }
 }

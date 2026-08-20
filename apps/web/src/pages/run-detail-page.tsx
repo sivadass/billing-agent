@@ -244,8 +244,21 @@ export function RunDetailPage() {
               <div className={styles['fields-grid']}>
                 <DetailField label="Error code" value={run.errorCode ?? '—'} mono />
                 <DetailField label="Error message" value={run.errorMessage ?? '—'} />
-                <DetailField label="Screenshot path" value={run.screenshotPath ?? '—'} mono />
               </div>
+            </Section>
+          ) : null}
+
+          {run.screenshotUrl || run.screenshotPath ? (
+            <Section title="Screenshot">
+              {run.screenshotUrl ? (
+                <img
+                  src={run.screenshotUrl}
+                  alt="Error screenshot"
+                  className={styles.screenshot}
+                />
+              ) : (
+                <DetailField label="Path" value={run.screenshotPath ?? '—'} mono />
+              )}
             </Section>
           ) : null}
 
@@ -273,7 +286,6 @@ export function RunDetailPage() {
               <DetailField label="Recovery attempted" value={yesNo(run.recoveryAttempted)} />
               <DetailField label="Recovery succeeded" value={yesNo(run.recoverySucceeded)} />
               <DetailField label="Overlay activated" value={yesNo(run.overlayActivated)} />
-              <DetailField label="Screenshot path" value={run.screenshotPath ?? '—'} mono />
               <DetailField
                 label="Finished"
                 value={

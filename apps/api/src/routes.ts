@@ -14,6 +14,7 @@ import {
   ConfigError,
   encryptSecret,
   parseMasterKey,
+  signRunScreenshot,
   verifyPassword,
 } from '@billing-agent/core';
 import { requireJwtAuth } from './auth.js';
@@ -231,7 +232,7 @@ function toJobResponse(job: JobDocument): JobDocument {
  * Serializes only the canonical run fields, so a document still carrying
  * pre-migration `provider` / `billSummary` keys can never leak them.
  */
-function toRunResponse(run: RunDocument): RunDocument {
+function toRunResponse(run: RunDocument, screenshotUrl?: string): RunDocument {
   return {
     id: run.id,
     jobId: run.jobId,
@@ -245,6 +246,7 @@ function toRunResponse(run: RunDocument): RunDocument {
     errorCode: run.errorCode ?? null,
     errorMessage: run.errorMessage ?? null,
     screenshotPath: run.screenshotPath ?? null,
+    ...(screenshotUrl ? { screenshotUrl } : {}),
     recoveryAttempted: run.recoveryAttempted === true,
     recoverySucceeded: run.recoverySucceeded === true,
     overlayActivated: run.overlayActivated === true,
@@ -480,7 +482,14 @@ export async function handleRoute(
       sendJson(res, 404, { error: 'Run not found' });
       return;
     }
-    sendJson(res, 200, toRunResponse(run));
+    sendJson(
+      res,
+      200,
+      toRunResponse(
+        run,
+        await signRunScreenshot(run.screenshotPath, ctx.env ?? process.env),
+      ),
+    );
     return;
   }
 

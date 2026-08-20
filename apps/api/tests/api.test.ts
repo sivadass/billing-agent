@@ -1740,6 +1740,42 @@ describe('cross-user isolation', () => {
     });
     assert.equal(ownResponse.status, 200);
   });
+
+  it('attaches a presigned screenshot URL for B2 run keys', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      env: {
+        ...TEST_ENV,
+        B2_ACCESS_KEY_ID: 'test-key',
+        B2_SECRET_ACCESS_KEY: 'test-secret',
+        B2_BUCKET_NAME: 'notepad-attachments',
+        B2_ENDPOINT: 'https://s3.us-east-005.backblazeb2.com',
+      },
+    });
+    const key = 'billing-agent/runs/run-shot/1.png';
+    await store.createRun(
+      canonicalRun({
+        id: 'run-shot',
+        jobId: 'home-eb',
+        userId: user.id,
+        status: 'failed',
+        screenshotPath: key,
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/runs/run-shot`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      screenshotPath?: string;
+      screenshotUrl?: string;
+    };
+    assert.equal(body.screenshotPath, key);
+    assert.match(body.screenshotUrl ?? '', /X-Amz-Signature=/);
+    assert.match(body.screenshotUrl ?? '', /billing-agent\/runs\/run-shot\/1\.png/);
+  });
 });
 
 describe('api CORS', () => {

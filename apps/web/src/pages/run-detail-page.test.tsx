@@ -137,4 +137,28 @@ describe('RunDetailPage result', () => {
 
     expect(await screen.findByText('No result for this run.')).toBeInTheDocument();
   });
+
+  it('renders a screenshot image when the run has a signed URL', async () => {
+    vi.mocked(runsApi.getRun).mockResolvedValue(
+      canonicalRun({
+        status: 'failed',
+        errorCode: 'LoginError',
+        errorMessage: 'login failed',
+        screenshotPath: 'billing-agent/runs/r1/1.png',
+        screenshotUrl: 'https://b2.example/run.png',
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/r1']}>
+        <Routes>
+          <Route path="/runs/:runId" element={<RunDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const image = await screen.findByRole('img', { name: 'Error screenshot' });
+    expect(image).toHaveAttribute('src', 'https://b2.example/run.png');
+    expect(screen.queryByText('Screenshot path')).not.toBeInTheDocument();
+  });
 });

@@ -121,6 +121,7 @@ export type RunDocument = {
   errorCode: string | null;
   errorMessage: string | null;
   screenshotPath: string | null;
+  screenshotUrl?: string;
   recoveryAttempted: boolean;
   recoverySucceeded: boolean;
   overlayActivated: boolean;

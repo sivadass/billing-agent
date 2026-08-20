@@ -134,6 +134,8 @@ export type RunDocument = {
   errorCode: string | null;
   errorMessage: string | null;
   screenshotPath: string | null;
+  /** Derived presigned GET URL; never stored. */
+  screenshotUrl?: string;
   recoveryAttempted: boolean;
   recoverySucceeded: boolean;
   overlayActivated: boolean;

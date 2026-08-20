@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import { Mistral } from '@mistralai/mistralai';
 import type { BillingAdapter, BillResult } from './adapters/types.js';
 import { getAdapter } from './adapters/registry.js';
@@ -21,6 +19,10 @@ import {
   TimeoutError,
 } from './errors.js';
 import { createLogger } from './logger.js';
+import {
+  isObjectStorageConfigured,
+  uploadRunScreenshot,
+} from './object-storage.js';
 import {
   formatFailureBody,
   formatSuccessBody,
@@ -63,6 +65,11 @@ export type RunnerDeps = {
     input: Parameters<typeof proposeOverlayPatchWithDeps>[0],
   ) => Promise<Awaited<ReturnType<typeof proposeOverlayPatchWithDeps>>>;
   extractCompactDom: typeof extractCompactDom;
+  uploadScreenshot: (input: {
+    runId: string;
+    body: Buffer;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<string | undefined>;
 };
 
 const defaultDeps: RunnerDeps = {
@@ -77,7 +84,17 @@ const defaultDeps: RunnerDeps = {
     throw new ConfigError('Recovery proposer not configured');
   },
   extractCompactDom,
+  uploadScreenshot: defaultUploadScreenshot,
 };
+
+async function defaultUploadScreenshot(input: {
+  runId: string;
+  body: Buffer;
+  env: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  if (!isObjectStorageConfigured(input.env)) return undefined;
+  return uploadRunScreenshot(input);
+}
 
 /** An adapter returns a `BillResult`; the interpreter returns the extracted record. */
 export type JobRunOutput = BillResult | Record<string, unknown>;
@@ -287,24 +304,32 @@ async function sendJobNotification(input: {
 
 async function captureScreenshot(
   app: AppConfig,
-  job: JobConfig,
   logger: ReturnType<typeof createLogger>,
   page: {
-    screenshot: (options: { path: string }) => Promise<Buffer | Uint8Array | void>;
+    screenshot: (options?: { type?: 'png' }) => Promise<Buffer | Uint8Array | void>;
+  },
+  input: {
+    runId: string;
+    env: NodeJS.ProcessEnv;
+    uploadScreenshot: RunnerDeps['uploadScreenshot'];
   },
 ): Promise<{ path?: string; base64?: string }> {
   if (!app.browser.saveErrorScreenshot) return {};
-  const safeJobId = job.id.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const candidatePath = path.join('tmp', `${safeJobId}-${Date.now()}.png`);
   try {
-    await mkdir(path.dirname(candidatePath), { recursive: true });
-    const png = await page.screenshot({ path: candidatePath });
-    const base64 = Buffer.isBuffer(png)
-      ? png.toString('base64')
-      : png instanceof Uint8Array
-        ? Buffer.from(png).toString('base64')
+    const raw = await page.screenshot({ type: 'png' });
+    const body = Buffer.isBuffer(raw)
+      ? raw
+      : raw instanceof Uint8Array
+        ? Buffer.from(raw)
         : undefined;
-    return { path: candidatePath, base64 };
+    const base64 = body?.toString('base64');
+    if (!body) return { base64 };
+    const path = await input.uploadScreenshot({
+      runId: input.runId,
+      body,
+      env: input.env,
+    });
+    return { path, base64 };
   } catch (screenshotError) {
     logger.warn('error screenshot failed', {
       error: String(screenshotError),
@@ -427,7 +452,11 @@ async function executeJob(
           const record = await runWorkflowOnce();
           return { result: record, record };
         } catch (cause) {
-          const screenshot = await captureScreenshot(app, job, logger, page);
+          const screenshot = await captureScreenshot(app, logger, page, {
+            runId,
+            env: runnerDeps.env,
+            uploadScreenshot: runnerDeps.uploadScreenshot,
+          });
           screenshotPath = screenshot.path;
           screenshotBase64 = screenshot.base64;
           const error = toAppError(cause);
@@ -510,7 +539,11 @@ async function executeJob(
       try {
         return toExecution(await runAdapter());
       } catch (cause) {
-        const screenshot = await captureScreenshot(app, job, logger, page);
+        const screenshot = await captureScreenshot(app, logger, page, {
+          runId,
+          env: runnerDeps.env,
+          uploadScreenshot: runnerDeps.uploadScreenshot,
+        });
         screenshotPath = screenshot.path;
         screenshotBase64 = screenshot.base64;
         const error = toAppError(cause);

@@ -7,10 +7,14 @@ import {
   getB2Config,
   isConversationScreenshotKey,
   isObjectStorageConfigured,
+  isRunScreenshotKey,
   resolveB2RegionFromEndpoint,
+  runScreenshotKey,
   signConversationScreenshots,
+  signRunScreenshot,
   uploadConversationScreenshot,
   uploadObject,
+  uploadRunScreenshot,
 } from '../src/object-storage.ts';
 
 const B2_ENV: NodeJS.ProcessEnv = {
@@ -163,5 +167,58 @@ describe('signConversationScreenshots', () => {
     );
     assert.equal(signed[1]?.screenshotUrl, undefined);
     assert.equal(signed[2]?.screenshotUrl, undefined);
+  });
+});
+
+describe('run screenshot keys', () => {
+  it('namespaces keys under billing-agent/runs and sanitizes the run id', () => {
+    const key = runScreenshotKey('../evil?', 1_700_000_000_000);
+    assert.equal(key, 'billing-agent/runs/.._evil_/1700000000000.png');
+    assert.equal(isRunScreenshotKey(key), true);
+    assert.equal(isConversationScreenshotKey(key), false);
+    assert.equal(isRunScreenshotKey('tmp/fake-job-1.png'), false);
+  });
+});
+
+describe('uploadRunScreenshot', () => {
+  it('uploads under a run key and returns that key', async () => {
+    let uploadedKey: string | undefined;
+    __setObjectStorageForTests({
+      client: {
+        send: async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+          uploadedKey = String(command.input.Key);
+          return {};
+        },
+      },
+    });
+
+    const key = await uploadRunScreenshot({
+      runId: 'run-99',
+      body: Buffer.from('png'),
+      env: B2_ENV,
+    });
+
+    assert.equal(isRunScreenshotKey(key), true);
+    assert.match(key, /^billing-agent\/runs\/run-99\/\d+\.png$/);
+    assert.equal(uploadedKey, key);
+  });
+});
+
+describe('signRunScreenshot', () => {
+  it('presigns B2 run keys and ignores legacy tmp paths', async () => {
+    __setObjectStorageForTests({
+      presignGet: async ({ key }) => `https://b2.example/get?key=${encodeURIComponent(key)}`,
+    });
+
+    const url = await signRunScreenshot(
+      'billing-agent/runs/run-1/1.png',
+      B2_ENV,
+    );
+    assert.equal(
+      url,
+      'https://b2.example/get?key=billing-agent%2Fruns%2Frun-1%2F1.png',
+    );
+    assert.equal(await signRunScreenshot('tmp/legacy.png', B2_ENV), undefined);
+    assert.equal(await signRunScreenshot(null, B2_ENV), undefined);
   });
 });

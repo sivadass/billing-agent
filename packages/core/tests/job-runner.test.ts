@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
@@ -700,8 +700,8 @@ describe('runJob', () => {
     ]);
   });
 
-  it('creates tmp before capturing and reports an error screenshot', async () => {
-    let screenshotPath: string | undefined;
+  it('uploads error screenshots to B2 and reports the object key', async () => {
+    let uploaded: { runId: string; body: Buffer } | undefined;
     let notificationBody = '';
     const adapter: BillingAdapter = {
       id: 'fake',
@@ -710,11 +710,7 @@ describe('runJob', () => {
       },
     };
     const page = {
-      screenshot: async (options: { path: string }) => {
-        assert.equal(existsSync(dirname(options.path)), true);
-        screenshotPath = options.path;
-        return Buffer.alloc(0);
-      },
+      screenshot: async () => Buffer.from('png-bytes'),
     } as unknown as Page;
 
     const result = await runJob(
@@ -736,58 +732,49 @@ describe('runJob', () => {
         }),
         getAdapter: () => adapter,
         env: testEnv,
+        uploadScreenshot: async ({ runId, body }) => {
+          uploaded = { runId, body };
+          return `billing-agent/runs/${runId}/1.png`;
+        },
       },
     );
 
     assert.equal(result.ok, false);
-    assert.match(
-      screenshotPath ?? '',
-      /^tmp\/fake-job-\d+\.png$/,
-    );
+    assert.ok(uploaded);
+    assert.deepEqual(uploaded.body, Buffer.from('png-bytes'));
+    assert.match(uploaded.runId, /^[0-9a-f-]{36}$/);
     assert.match(
       notificationBody,
-      /Screenshot: tmp\/fake-job-\d+\.png$/,
+      /Screenshot: billing-agent\/runs\/[0-9a-f-]{36}\/1\.png$/,
     );
   });
 
-  it('sanitizes the job id used in error screenshot paths', async () => {
-    let screenshotPath: string | undefined;
-    const unsafeJob = { ...job, id: '../nested/evil?' };
+  it('skips screenshot upload when saveErrorScreenshot is false', async () => {
+    let uploaded = false;
     const adapter: BillingAdapter = {
       id: 'fake',
       async run() {
         throw new LoginError('login failed');
       },
     };
-    const page = {
-      screenshot: async (options: { path: string }) => {
-        screenshotPath = options.path;
-        return Buffer.alloc(0);
-      },
-    } as unknown as Page;
 
-    await runJob(
-      {
-        ...app,
-        browser: { ...app.browser, saveErrorScreenshot: true },
-      },
-      unsafeJob,
-      {
-        withBrowser: async (_config, callback) => callback(page),
-        sendNtfy: async () => {},
+    await runJob(app, job, {
+      withBrowser: async (_config, callback) =>
+        callback({ screenshot: async () => Buffer.from('png') } as unknown as Page),
       dispatchNotify: async () => {},
-        createMistralCaptchaSolver: () => ({
-          solveFromImageBase64: async () => 'captcha',
-        }),
-        getAdapter: () => adapter,
-        env: testEnv,
+      sendNtfy: async () => {},
+      createMistralCaptchaSolver: () => ({
+        solveFromImageBase64: async () => 'captcha',
+      }),
+      getAdapter: () => adapter,
+      env: testEnv,
+      uploadScreenshot: async () => {
+        uploaded = true;
+        return 'billing-agent/runs/run-1/1.png';
       },
-    );
+    });
 
-    assert.match(
-      screenshotPath ?? '',
-      /^tmp\/___nested_evil_-\d+\.png$/,
-    );
+    assert.equal(uploaded, false);
   });
 
   it('returns the job error when the failure notification also fails', async () => {

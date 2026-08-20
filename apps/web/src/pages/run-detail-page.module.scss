@@ -102,3 +102,13 @@
   color: var(--text-subtle);
   line-height: 1.5;
 }
+
+.screenshot {
+  display: block;
+  width: 100%;
+  max-width: 48rem;
+  height: auto;
+  overflow: hidden;
+  border: 1px solid var(--primary-brand-lightest);
+  border-radius: var(--radius-large);
+}
