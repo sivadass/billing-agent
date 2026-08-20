@@ -252,9 +252,7 @@ describe('Chat list', () => {
     );
 
     expect(await screen.findByText('No chats yet')).toBeInTheDocument();
-    const newChatButtons = screen.getAllByRole('button', { name: /new chat/i });
-    fireEvent.click(newChatButtons[0]!);
-    expect(await screen.findByText('Composer route')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /new chat/i })).toHaveLength(1);
   });
 
   it('shows Untitled chat when goal is empty', async () => {

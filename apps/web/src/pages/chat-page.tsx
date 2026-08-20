@@ -616,12 +616,7 @@ export function ChatListPage() {
         </div>
       ) : null}
       {!isLoading && !error && conversations.length === 0 ? (
-        <FeedbackState
-          variant="empty"
-          margin="t-5"
-          title="No chats yet"
-          primaryAction={{ label: 'New chat', onClick: () => navigate('/chat/new') }}
-        />
+        <FeedbackState variant="empty" margin="t-5" title="No chats yet" />
       ) : null}
       {!isLoading && !error && conversations.length > 0 ? (
         <ConversationsTable
