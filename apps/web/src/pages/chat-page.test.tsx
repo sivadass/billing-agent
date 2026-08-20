@@ -299,7 +299,7 @@ describe('Chat session abandon', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText('Grab the contact email address');
+    await screen.findByText('In progress');
     fireEvent.click(screen.getByRole('button', { name: /more options/i }));
     fireEvent.click(await screen.findByText('Abandon'));
     expect(screen.getByText('Abandon chat?')).toBeInTheDocument();

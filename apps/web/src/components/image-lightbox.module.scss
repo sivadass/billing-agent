@@ -2,6 +2,7 @@
   display: block;
   width: 100%;
   max-width: 10rem;
+  min-height: 6rem;
   margin-top: var(--space-2);
   padding: 0;
   overflow: hidden;
@@ -15,6 +16,7 @@
   display: block;
   width: 100%;
   height: auto;
+  min-height: 6rem;
   max-height: 6rem;
   object-fit: cover;
   object-position: top;

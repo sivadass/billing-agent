@@ -1,5 +1,6 @@
 import {
   Alert,
+  BreadCrumb,
   Button,
   ConfirmDialog,
   Container,
@@ -342,6 +343,13 @@ function ChatThread({ conversationId }: { conversationId: string }) {
     <div className={styles.session}>
       <div className={styles['session-column']}>
         <div className={styles['session-header']}>
+          <BreadCrumb
+            margin="b-2"
+            items={[
+              { label: 'Chat', href: '/chat' },
+              { label: conversation.goal?.trim() || 'Untitled chat' },
+            ]}
+          />
           <PageHeader
             title={
               <span className={styles['session-title']} title={conversation.goal ?? undefined}>
@@ -535,7 +543,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
                   resizeComposer();
                 }}
                 onKeyDown={handleComposerKeyDown}
-                placeholder={isAwaitingReply ? 'Agent is working…' : 'Message'}
+                placeholder={isAwaitingReply ? 'Agent is working…' : 'Message · Enter to send'}
                 aria-label="Message"
                 disabled={isBusy || isAwaitingReply}
                 rows={1}
@@ -548,7 +556,11 @@ function ChatThread({ conversationId }: { conversationId: string }) {
                 isLoading={isBusy}
                 isDisabled={isBusy || isAwaitingReply || !messageText.trim()}
               >
-                <Icon name="arrow_upward" color="white" size="small" />
+                <Icon
+                  name="arrow_upward"
+                  color={isBusy || isAwaitingReply || !messageText.trim() ? 'gray' : 'white'}
+                  size="small"
+                />
               </Button>
             </div>
           </form>
