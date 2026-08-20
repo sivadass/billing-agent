@@ -280,7 +280,7 @@ describe('Chat session layout', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
   });
 
-  it('renders a screenshot image when the message has a signed URL', async () => {
+  it('renders a screenshot thumbnail lightbox when the message has a signed URL', async () => {
     vi.mocked(conversationsApi.getConversation).mockResolvedValue(
       conversation({
         messages: [
@@ -304,8 +304,11 @@ describe('Chat session layout', () => {
       </MemoryRouter>,
     );
 
-    const image = await screen.findByRole('img', { name: 'Page snapshot' });
-    expect(image).toHaveAttribute('src', 'https://b2.example/signed.png');
+    const button = await screen.findByRole('button', { name: /view page snapshot full size/i });
+    const thumbnail = button.querySelector('img');
+    expect(thumbnail).toHaveAttribute('src', 'https://b2.example/signed.png');
+    expect(thumbnail).toHaveAttribute('alt', '');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('shows a working state while waiting for the first assistant reply', async () => {

@@ -13,6 +13,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import type { KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ConversationsTable } from '../components/conversations-table';
+import { ImageLightbox } from '../components/image-lightbox';
 import { Loader } from '../components/loader';
 import {
   abandonConversation,
@@ -373,10 +374,9 @@ function ChatThread({ conversationId }: { conversationId: string }) {
                       {message.text}
                     </Typography>
                     {message.screenshotUrl ? (
-                      <img
+                      <ImageLightbox
                         src={message.screenshotUrl}
                         alt="Page snapshot"
-                        className={styles.screenshot}
                       />
                     ) : message.screenshotPath ? (
                       <Typography

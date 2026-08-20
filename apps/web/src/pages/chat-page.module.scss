@@ -82,16 +82,6 @@
   align-items: flex-start;
 }
 
-.screenshot {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin-top: var(--space-2);
-  overflow: hidden;
-  border: 1px solid var(--primary-brand-lightest);
-  border-radius: var(--radius-large);
-}
-
 .bubble {
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--primary-brand-lightest);
