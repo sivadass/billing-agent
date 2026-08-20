@@ -213,6 +213,8 @@
   padding: var(--space-2) 0;
   border: 0;
   resize: none;
+  line-height: 1.5;
+  overflow-y: auto;
   color: var(--text-default);
   background-color: transparent;
   outline: none;

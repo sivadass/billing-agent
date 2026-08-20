@@ -377,7 +377,10 @@ describe('Chat session layout', () => {
     );
 
     expect(await screen.findByText('Working…')).toBeInTheDocument();
-    expect(screen.getByText('Agent is working…')).toBeInTheDocument();
+    expect(screen.queryByText('Agent is working…')).not.toBeInTheDocument();
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+    expect(textarea).toBeDisabled();
+    expect(textarea).toHaveAttribute('placeholder', 'Agent is working…');
   });
 
   it('does not render secret markup in message bubbles', async () => {

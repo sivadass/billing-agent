@@ -177,6 +177,14 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   const [isBusy, setIsBusy] = useState(false);
   const [abandonOpen, setAbandonOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const resizeComposer = useCallback(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  }, []);
 
   const loadConversation = useCallback(async () => {
     setError(null);
@@ -224,6 +232,10 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ block: 'end' });
   }, [conversation?.messages.length, isBusy]);
+
+  useEffect(() => {
+    resizeComposer();
+  }, [messageText, resizeComposer]);
 
   const handleSendMessage = async () => {
     if (!messageText.trim()) return;
@@ -354,9 +366,9 @@ function ChatThread({ conversationId }: { conversationId: string }) {
 
           <Container className={styles.meta} padding="0" margin="t-3">
             <ChatStatusBadge status={conversation.status} />
-            {isPollingConversationStatus(conversation.status) ? (
+            {isPollingConversationStatus(conversation.status) && !isAwaitingReply ? (
               <Typography variant="small" className={styles['polling-hint']}>
-                {isAwaitingReply ? 'Agent is working…' : 'Live · updates every 2s'}
+                Live
               </Typography>
             ) : null}
           </Container>
@@ -515,13 +527,17 @@ function ChatThread({ conversationId }: { conversationId: string }) {
           >
             <div className={styles['composer-pill']}>
               <textarea
+                ref={composerInputRef}
                 className={styles['composer-input']}
                 value={messageText}
-                onChange={(event) => setMessageText(event.target.value)}
+                onChange={(event) => {
+                  setMessageText(event.target.value);
+                  resizeComposer();
+                }}
                 onKeyDown={handleComposerKeyDown}
-                placeholder="Message"
+                placeholder={isAwaitingReply ? 'Agent is working…' : 'Message'}
                 aria-label="Message"
-                disabled={isBusy}
+                disabled={isBusy || isAwaitingReply}
                 rows={1}
               />
               <Button
@@ -530,7 +546,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
                 type="submit"
                 aria-label="Send"
                 isLoading={isBusy}
-                isDisabled={isBusy || !messageText.trim()}
+                isDisabled={isBusy || isAwaitingReply || !messageText.trim()}
               >
                 <Icon name="arrow_upward" color="white" size="small" />
               </Button>
