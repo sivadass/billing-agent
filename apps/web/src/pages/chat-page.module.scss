@@ -29,6 +29,7 @@
   min-height: 0;
   overflow-y: auto;
   padding-top: var(--space-3);
+  padding-bottom: calc(var(--space-4) + 4.75rem);
 }
 
 .thread {
@@ -58,7 +59,7 @@
 
 .day-label {
   flex-shrink: 0;
-  color: var(--text-muted);
+  color: var(--text-subtle);
 }
 
 .message {
@@ -85,9 +86,28 @@
 .bubble {
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--primary-brand-lightest);
-  border-radius: 1.25rem;
+  border-radius: var(--radius-xx-large);
   color: var(--text-default);
   background-color: var(--white);
+}
+
+.message-user .bubble {
+  background-color: var(--primary-brand);
+  border-color: var(--primary-brand);
+  color: var(--white);
+  border-radius: var(--radius-xx-large) var(--radius-xx-large) var(--space-1)
+    var(--radius-xx-large);
+}
+
+.message-user .bubble-text {
+  color: var(--white);
+}
+
+.message-assistant .bubble {
+  background-color: var(--white);
+  border-color: var(--primary-brand-light);
+  border-radius: var(--radius-xx-large) var(--radius-xx-large) var(--radius-xx-large)
+    var(--space-1);
 }
 
 .bubble-text {
@@ -113,7 +133,7 @@
 }
 
 .polling-hint {
-  color: var(--text-muted);
+  color: var(--text-subtle);
 }
 
 .panel {
@@ -152,6 +172,12 @@
   border-radius: 1.5rem;
   background-color: var(--white);
   box-shadow: 0 4px 16px color-mix(in srgb, var(--billing-primary) 10%, transparent);
+
+  &:focus-within {
+    box-shadow:
+      0 0 0 2px var(--white),
+      0 0 0 4px var(--primary-brand);
+  }
 }
 
 .composer-input {
