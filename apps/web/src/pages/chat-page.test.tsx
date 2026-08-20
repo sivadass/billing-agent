@@ -256,6 +256,29 @@ describe('Chat list', () => {
     fireEvent.click(newChatButtons[0]!);
     expect(await screen.findByText('Composer route')).toBeInTheDocument();
   });
+
+  it('shows Untitled chat when goal is empty', async () => {
+    vi.mocked(conversationsApi.listConversations).mockResolvedValue([
+      summary({
+        id: 'conv-empty',
+        goal: '',
+        startUrl: 'https://example.com/billing/invoices/2026/august/statement?account=092950013733',
+        status: 'confirming',
+      }),
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <Routes>
+          <Route path="/chat" element={<ChatListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Untitled chat')).toBeInTheDocument();
+    expect(screen.getByText('Ready to confirm')).toBeInTheDocument();
+    expect(screen.queryByText('awaiting_secret')).not.toBeInTheDocument();
+  });
 });
 
 describe('Chat session layout', () => {
