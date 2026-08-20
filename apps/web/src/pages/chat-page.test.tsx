@@ -350,4 +350,32 @@ describe('Chat session layout', () => {
     expect(await screen.findByText('Working…')).toBeInTheDocument();
     expect(screen.getByText('Agent is working…')).toBeInTheDocument();
   });
+
+  it('does not render secret markup in message bubbles', async () => {
+    vi.mocked(conversationsApi.getConversation).mockResolvedValue(
+      conversation({
+        status: 'awaiting_secret',
+        messages: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            text: 'Provide [secret:username] please.',
+            createdAt: '2026-08-17T12:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    vi.mocked(conversationsApi.parseSecretKeysFromMessages).mockReturnValue(['username']);
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Provide please\./)).toBeInTheDocument();
+    expect(screen.queryByText(/\[secret:username\]/)).not.toBeInTheDocument();
+  });
 });

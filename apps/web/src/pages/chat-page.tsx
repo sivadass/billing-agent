@@ -27,6 +27,7 @@ import {
   postConversationSecrets,
   rejectConversationDraft,
 } from '../lib/conversations-api';
+import { sanitizeMessageText } from '../lib/sanitize-message-text';
 import {
   formatClockTime,
   formatDateHeading,
@@ -173,6 +174,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   const [messageText, setMessageText] = useState('');
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [isBusy, setIsBusy] = useState(false);
+  const [abandonOpen, setAbandonOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const loadConversation = useCallback(async () => {
@@ -325,29 +327,41 @@ function ChatThread({ conversationId }: { conversationId: string }) {
 
   return (
     <div className={styles.session}>
-      <div className={styles['session-header']}>
-        <PageHeader
-          title="Chat session"
-          subtitle={conversation.goal ?? conversation.startUrl ?? conversationId}
-          primaryCta={
-            <Button variant="outline" onClick={() => void handleAbandon()} disabled={isBusy}>
-              Abandon
-            </Button>
-          }
-        />
-        {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
+      <div className={styles['session-column']}>
+        <div className={styles['session-header']}>
+          <PageHeader
+            title={
+              <span className={styles['session-title']} title={conversation.goal ?? undefined}>
+                {conversation.goal?.trim() || 'Untitled chat'}
+              </span>
+            }
+            subtitle={
+              <span
+                className={styles['session-subtitle']}
+                title={conversation.startUrl ?? undefined}
+              >
+                {conversation.startUrl ?? conversationId}
+              </span>
+            }
+            moreMenuItems={
+              isBusy
+                ? undefined
+                : [{ label: 'Abandon', onClick: () => setAbandonOpen(true) }]
+            }
+          />
+          {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
 
-        <Container className={styles.meta} padding="0" margin="t-3">
-          <ChatStatusBadge status={conversation.status} />
-          {isPollingConversationStatus(conversation.status) ? (
-            <Typography variant="small" className={styles['polling-hint']}>
-              {isAwaitingReply ? 'Agent is working…' : 'Live · updates every 2s'}
-            </Typography>
-          ) : null}
-        </Container>
-      </div>
+          <Container className={styles.meta} padding="0" margin="t-3">
+            <ChatStatusBadge status={conversation.status} />
+            {isPollingConversationStatus(conversation.status) ? (
+              <Typography variant="small" className={styles['polling-hint']}>
+                {isAwaitingReply ? 'Agent is working…' : 'Live · updates every 2s'}
+              </Typography>
+            ) : null}
+          </Container>
+        </div>
 
-      <div className={styles['session-body']}>
+        <div className={styles['session-body']}>
         <div className={styles.thread}>
           {conversation.messages.map((message, index) => {
             const previous = conversation.messages[index - 1];
@@ -370,7 +384,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
                 >
                   <div className={styles.bubble}>
                     <Typography variant="p" className={styles['bubble-text']}>
-                      {message.text}
+                      {sanitizeMessageText(message.text)}
                     </Typography>
                     {message.screenshotUrl ? (
                       <ImageLightbox
@@ -413,7 +427,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
 
         {conversation.status === 'awaiting_secret' ? (
           <Container className={styles.panel} padding="4" showBorder>
-            <Typography variant="h4" margin="b-3">
+            <Typography variant="h5" margin="b-3">
               Secrets required
             </Typography>
             {secretKeys.map((key) => (
@@ -439,7 +453,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
 
         {conversation.status === 'confirming' ? (
           <Container className={styles.panel} padding="4" showBorder>
-            <Typography variant="h4" margin="b-3">
+            <Typography variant="h5" margin="b-3">
               Confirm proposed job
             </Typography>
             {draftEntries.length > 0 ? (
@@ -488,40 +502,41 @@ function ChatThread({ conversationId }: { conversationId: string }) {
             primaryAction={{ label: 'New chat', onClick: () => navigate('/chat') }}
           />
         ) : null}
-      </div>
+        </div>
 
-      {conversation.status === 'active' ? (
-        <form
-          className={styles['composer-dock']}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleSendMessage();
-          }}
-        >
-          <div className={styles['composer-pill']}>
-            <textarea
-              className={styles['composer-input']}
-              value={messageText}
-              onChange={(event) => setMessageText(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="Message"
-              aria-label="Message"
-              disabled={isBusy}
-              rows={1}
-            />
-            <Button
-              className={styles['composer-send']}
-              variant="icon"
-              type="submit"
-              aria-label="Send"
-              isLoading={isBusy}
-              isDisabled={isBusy || !messageText.trim()}
-            >
-              <Icon name="arrow_upward" color="white" size="small" />
-            </Button>
-          </div>
-        </form>
-      ) : null}
+        {conversation.status === 'active' ? (
+          <form
+            className={styles['composer-dock']}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSendMessage();
+            }}
+          >
+            <div className={styles['composer-pill']}>
+              <textarea
+                className={styles['composer-input']}
+                value={messageText}
+                onChange={(event) => setMessageText(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
+                placeholder="Message"
+                aria-label="Message"
+                disabled={isBusy}
+                rows={1}
+              />
+              <Button
+                className={styles['composer-send']}
+                variant="icon"
+                type="submit"
+                aria-label="Send"
+                isLoading={isBusy}
+                isDisabled={isBusy || !messageText.trim()}
+              >
+                <Icon name="arrow_upward" color="white" size="small" />
+              </Button>
+            </div>
+          </form>
+        ) : null}
+      </div>
     </div>
   );
 }
