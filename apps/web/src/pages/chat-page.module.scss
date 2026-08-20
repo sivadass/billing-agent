@@ -186,3 +186,25 @@
     background-color: var(--primary-brand-light);
   }
 }
+
+.status-badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-small);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-default);
+
+  &--in-progress {
+    background-color: var(--orange-light);
+  }
+
+  &--saved {
+    background-color: var(--green-light);
+  }
+
+  &--error {
+    background-color: var(--red-light);
+  }
+}
