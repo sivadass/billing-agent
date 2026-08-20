@@ -90,7 +90,7 @@ describe('ChatPage polling', () => {
     await flushAsync();
     await flushAsync();
     expect(conversationsApi.getConversation).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('active')).toBeInTheDocument();
+    expect(screen.getByText('In progress')).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(2200);
@@ -98,7 +98,7 @@ describe('ChatPage polling', () => {
     });
     await flushAsync();
     expect(conversationsApi.getConversation).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('saved')).toBeInTheDocument();
+    expect(screen.getByText('Saved')).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(5000);

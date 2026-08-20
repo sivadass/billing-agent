@@ -1,6 +1,5 @@
 import {
   Alert,
-  Badge,
   Button,
   Container,
   FeedbackState,
@@ -13,6 +12,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import type { KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ConversationsTable } from '../components/conversations-table';
+import { ChatStatusBadge } from '../components/chat-status-badge';
 import { ImageLightbox } from '../components/image-lightbox';
 import { Loader } from '../components/loader';
 import {
@@ -27,7 +27,6 @@ import {
   postConversationSecrets,
   rejectConversationDraft,
 } from '../lib/conversations-api';
-import { conversationStatusVariant } from '../lib/conversation-status';
 import {
   formatClockTime,
   formatDateHeading,
@@ -339,7 +338,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
         {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
 
         <Container className={styles.meta} padding="0" margin="t-3">
-          <Badge label={conversation.status} variant={conversationStatusVariant(conversation.status)} />
+          <ChatStatusBadge status={conversation.status} />
           {isPollingConversationStatus(conversation.status) ? (
             <Typography variant="small" className={styles['polling-hint']}>
               {isAwaitingReply ? 'Agent is working…' : 'Live · updates every 2s'}
