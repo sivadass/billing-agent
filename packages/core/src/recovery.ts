@@ -80,5 +80,5 @@ export async function proposeOverlayPatch(
     }
   }
 
-  return validateOverlayPatch(parsed);
+  return validateOverlayPatch(parsed, input.allowedKeys);
 }

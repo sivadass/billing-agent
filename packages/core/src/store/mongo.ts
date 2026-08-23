@@ -1,16 +1,20 @@
 import { MongoClient } from 'mongodb';
 import { ConfigError } from '../errors.js';
+import { assertJobDocument } from './assert-job.js';
+import { ensureStoreIndexes } from './indexes.js';
 import type {
   BillingStore,
+  ConversationDocument,
   JobDocument,
   OverlayDocument,
   OverlaySuccessInput,
-  PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
-  WatchDocument,
 } from './types.js';
+import type { LegacyMigrationSource } from '../migrate-generic-jobs.js';
+import { createMongoLegacyMigrationSource } from '../migrate-generic-jobs.js';
 
 const SETTINGS_ID: SettingsDocument['id'] = 'default';
 
@@ -36,12 +40,12 @@ type CollectionLike<T extends Record<string, unknown>> = {
 };
 
 type StoreCollections = {
-  jobs: CollectionLike<JobDocument>;
+  jobs: CollectionLike<Record<string, unknown>>;
   settings: CollectionLike<SettingsDocument>;
   overlays: CollectionLike<OverlayDocument>;
-  runs: CollectionLike<RunDocument>;
-  watches: CollectionLike<WatchDocument>;
-  priceChecks: CollectionLike<PriceCheckDocument>;
+  runs: CollectionLike<Record<string, unknown>>;
+  secrets: CollectionLike<SecretDocument>;
+  conversations: CollectionLike<ConversationDocument>;
   users: CollectionLike<UserDocument>;
 };
 
@@ -55,7 +59,103 @@ function normalizeSettings(
   return {
     ...settings,
     jobsGeneration: settings.jobsGeneration ?? 0,
-    watchesGeneration: settings.watchesGeneration ?? 0,
+  };
+}
+
+function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
+  if (typeof raw.engine === 'string') {
+    return assertJobDocument(raw);
+  }
+
+  const id = raw.id;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new ConfigError('job.id must be a non-empty string');
+  }
+
+  const notifyRaw = raw.notify;
+  if (
+    typeof notifyRaw !== 'object' ||
+    notifyRaw === null ||
+    Array.isArray(notifyRaw)
+  ) {
+    throw new ConfigError('job.notify must be an object');
+  }
+  const notifyTitle = (notifyRaw as { title?: unknown }).title;
+  if (typeof notifyTitle !== 'string' || notifyTitle.length === 0) {
+    throw new ConfigError('job.notify.title must be a non-empty string');
+  }
+
+  const provider = raw.provider;
+  if (typeof provider !== 'string' || provider.length === 0) {
+    throw new ConfigError('job.provider must be a non-empty string');
+  }
+
+  return assertJobDocument({
+    ...raw,
+    id,
+    name: notifyTitle,
+    engine: 'adapter',
+    adapterId: provider,
+    startUrl: '',
+    goal: '',
+    schema: [],
+    workflow: [],
+    secretIds: [],
+    lastResult: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    notify: {
+      title: notifyTitle,
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
+    },
+  });
+}
+
+function coerceLegacyRun(raw: Record<string, unknown>): RunDocument {
+  if (typeof raw.engine === 'string') {
+    const run = raw as RunDocument;
+    return {
+      ...run,
+      result: run.result ?? null,
+    };
+  }
+  return {
+    id: String(raw.id),
+    jobId: String(raw.jobId),
+    userId: String(raw.userId),
+    engine: 'adapter',
+    adapterId:
+      typeof raw.provider === 'string' ? raw.provider : undefined,
+    status: raw.status as RunDocument['status'],
+    startedAt: String(raw.startedAt),
+    finishedAt:
+      raw.finishedAt === null || typeof raw.finishedAt === 'string'
+        ? raw.finishedAt
+        : null,
+    durationMs:
+      raw.durationMs === null || typeof raw.durationMs === 'number'
+        ? raw.durationMs
+        : null,
+    errorCode:
+      raw.errorCode === null || typeof raw.errorCode === 'string'
+        ? raw.errorCode
+        : null,
+    errorMessage:
+      raw.errorMessage === null || typeof raw.errorMessage === 'string'
+        ? raw.errorMessage
+        : null,
+    screenshotPath:
+      raw.screenshotPath === null || typeof raw.screenshotPath === 'string'
+        ? raw.screenshotPath
+        : null,
+    recoveryAttempted: Boolean(raw.recoveryAttempted),
+    recoverySucceeded: Boolean(raw.recoverySucceeded),
+    overlayActivated: Boolean(raw.overlayActivated),
+    result:
+      raw.billSummary && typeof raw.billSummary === 'object'
+        ? (raw.billSummary as Record<string, unknown>)
+        : null,
   };
 }
 
@@ -80,15 +180,36 @@ export function createBillingStoreFromCollections(
       const jobs = await collections.jobs
         .find(options?.userId ? { userId: options.userId } : {})
         .toArray();
-      return jobs.sort((a, b) => a.id.localeCompare(b.id));
+      return jobs
+        .map((job) => coerceLegacyJob(job))
+        .sort((a, b) => a.id.localeCompare(b.id));
     },
 
     async getJob(id) {
-      return collections.jobs.findOne({ id });
+      const job = await collections.jobs.findOne({ id });
+      return job ? coerceLegacyJob(job) : null;
     },
 
+    /** See `BillingStore.listRawJobDocuments` — deliberately bypasses `coerceLegacyJob`. */
+    async listRawJobDocuments() {
+      const jobs = await collections.jobs.find({}).toArray();
+      return jobs.map((job) => ({ ...job }));
+    },
+
+    /**
+     * Validated before writing: `listJobs` / `getJob` validate on read, so an
+     * internal caller persisting a document that fails validation would make the
+     * whole job list unreadable. Legacy documents already in Mongo are
+     * untouched — they only ever arrive through the read-time
+     * `coerceLegacyJob` path, never through here.
+     */
     async upsertJob(job) {
-      await collections.jobs.updateOne({ id: job.id }, { $set: job }, { upsert: true });
+      const validated = assertJobDocument(job);
+      await collections.jobs.updateOne(
+        { id: validated.id },
+        { $set: validated },
+        { upsert: true },
+      );
     },
 
     async upsertSettings(settings) {
@@ -105,50 +226,58 @@ export function createBillingStoreFromCollections(
       );
     },
 
-    async listWatches(options) {
-      const watches = await collections.watches
-        .find(options?.userId ? { userId: options.userId } : {})
-        .toArray();
-      return watches.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    },
-
-    async getWatch(id) {
-      return collections.watches.findOne({ id });
-    },
-
-    async upsertWatch(watch) {
-      await collections.watches.updateOne(
-        { id: watch.id },
-        { $set: watch },
+    async upsertSecret(secret) {
+      await collections.secrets.updateOne(
+        { id: secret.id },
+        { $set: secret },
         { upsert: true },
       );
     },
 
-    async deleteWatch(id) {
-      await collections.priceChecks.deleteMany({ watchId: id });
-      await collections.watches.deleteOne({ id });
-    },
-
-    async createPriceCheck(check) {
-      await collections.priceChecks.insertOne(check);
-    },
-
-    async finishPriceCheck(id, update) {
-      await collections.priceChecks.updateOne({ id }, { $set: update });
-    },
-
-    async listPriceChecks(options) {
-      const checks = await collections.priceChecks
+    async listSecrets(options) {
+      const secrets = await collections.secrets
         .find({
-          watchId: options.watchId,
-          ...(options.userId ? { userId: options.userId } : {}),
+          userId: options.userId,
+          ...(options.jobId !== undefined ? { jobId: options.jobId } : {}),
+          ...(options.conversationId !== undefined
+            ? { conversationId: options.conversationId }
+            : {}),
         })
         .toArray();
-      const sorted = checks.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
-      if (options.limit && options.limit > 0) {
-        return sorted.slice(0, options.limit);
+      return secrets.sort((a, b) => a.key.localeCompare(b.key));
+    },
+
+    async deleteSecretsForJob(jobId) {
+      await collections.secrets.deleteMany({ jobId });
+    },
+
+    async upsertConversation(conversation) {
+      await collections.conversations.updateOne(
+        { id: conversation.id },
+        { $set: conversation },
+        { upsert: true },
+      );
+    },
+
+    async getConversation(id) {
+      return collections.conversations.findOne({ id });
+    },
+
+    async listConversations(options) {
+      const statusFilter = options?.status;
+      const conversations = await collections.conversations
+        .find({
+          ...(options?.userId ? { userId: options.userId } : {}),
+        })
+        .toArray();
+      let filtered = conversations;
+      if (statusFilter !== undefined) {
+        const allowed = Array.isArray(statusFilter) ? statusFilter : [statusFilter];
+        filtered = conversations.filter((conversation) =>
+          allowed.includes(conversation.status),
+        );
       }
-      return sorted;
+      return filtered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     },
 
     async listActiveOverlays(input) {
@@ -237,7 +366,9 @@ export function createBillingStoreFromCollections(
           ...(options?.jobId ? { jobId: options.jobId } : {}),
         })
         .toArray();
-      const sorted = runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      const sorted = runs
+        .map((run) => coerceLegacyRun(run))
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
       if (options?.limit && options.limit > 0) {
         return sorted.slice(0, options.limit);
       }
@@ -245,7 +376,8 @@ export function createBillingStoreFromCollections(
     },
 
     async getRun(id) {
-      return collections.runs.findOne({ id });
+      const run = await collections.runs.findOne({ id });
+      return run ? coerceLegacyRun(run) : null;
     },
 
     async findUserByEmail(email) {
@@ -265,26 +397,46 @@ export function createBillingStoreFromCollections(
 export async function connectStore(uri: string): Promise<BillingStore> {
   const client = new MongoClient(uri);
   await client.connect();
+  const { store } = await buildStoreFromClient(client);
+  return store;
+}
+
+export async function connectStoreForMigration(uri: string): Promise<{
+  store: BillingStore;
+  legacy: LegacyMigrationSource;
+  close: () => Promise<void>;
+}> {
+  const client = new MongoClient(uri);
+  await client.connect();
+  const built = await buildStoreFromClient(client);
+  return {
+    store: built.store,
+    legacy: built.legacy,
+    close: () => client.close(),
+  };
+}
+
+async function buildStoreFromClient(client: MongoClient): Promise<{
+  store: BillingStore;
+  legacy: LegacyMigrationSource;
+}> {
   const db = client.db();
   const users = db.collection<UserDocument>('users');
-  const watches = db.collection<WatchDocument>('watches');
-  const priceChecks = db.collection<PriceCheckDocument>('price_checks');
-  await users.createIndex({ email: 1 }, { unique: true });
-  await watches.createIndex({ userId: 1 });
-  await priceChecks.createIndex({ watchId: 1 });
-  await priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
-  return createBillingStoreFromCollections(
+  const secrets = db.collection<SecretDocument>('secrets');
+  await ensureStoreIndexes({ users, secrets });
+  const store = createBillingStoreFromCollections(
     {
-      jobs: db.collection<JobDocument>('jobs'),
+      jobs: db.collection('jobs') as unknown as CollectionLike<Record<string, unknown>>,
       settings: db.collection<SettingsDocument>('settings'),
       overlays: db.collection<OverlayDocument>('learned_overlays'),
-      runs: db.collection<RunDocument>('runs'),
-      watches,
-      priceChecks,
+      runs: db.collection('runs') as unknown as CollectionLike<Record<string, unknown>>,
+      secrets,
+      conversations: db.collection<ConversationDocument>('conversations'),
       users,
     },
     async () => {
       await client.close();
     },
   );
+  return { store, legacy: createMongoLegacyMigrationSource(db) };
 }

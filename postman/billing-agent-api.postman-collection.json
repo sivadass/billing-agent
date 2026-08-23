@@ -94,7 +94,7 @@
           }
         },
         {
-          "name": "Create Job",
+          "name": "Create Job (adapter)",
           "request": {
             "method": "POST",
             "header": [
@@ -105,9 +105,28 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"id\": \"smoke-test\",\n  \"provider\": \"dummy\",\n  \"enabled\": true,\n  \"schedule\": null,\n  \"credentialsEnv\": {},\n  \"notify\": { \"title\": \"Dummy Bill\" }\n}"
+              "raw": "{\n  \"id\": \"smoke-test\",\n  \"name\": \"Dummy Bill\",\n  \"engine\": \"adapter\",\n  \"adapterId\": \"dummy\",\n  \"enabled\": true,\n  \"schedule\": null,\n  \"notify\": {\n    \"title\": \"Dummy Bill\",\n    \"on\": \"always\",\n    \"channel\": { \"type\": \"ntfy\", \"topic\": \"bills\" }\n  }\n}"
             },
-            "url": "{{baseUrl}}/jobs"
+            "url": "{{baseUrl}}/jobs",
+            "description": "Canonical create. `provider` is still accepted as an alias for `adapterId`, but responses only ever use the canonical fields."
+          }
+        },
+        {
+          "name": "Create Job (workflow)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"shoe-price\",\n  \"name\": \"Shoe price\",\n  \"engine\": \"workflow\",\n  \"startUrl\": \"https://sivadass.in/\",\n  \"goal\": \"Read the listed price\",\n  \"schema\": [{ \"key\": \"price\", \"label\": \"Price\", \"type\": \"price\" }],\n  \"workflow\": [\n    { \"id\": \"open\", \"type\": \"goto\", \"url\": \"https://sivadass.in/\" },\n    {\n      \"id\": \"read-price\",\n      \"type\": \"extract\",\n      \"fields\": [\n        { \"key\": \"price\", \"selector\": \".product-price\", \"strategy\": \"price\" }\n      ]\n    }\n  ],\n  \"notify\": { \"title\": \"Shoe price\" }\n}"
+            },
+            "url": "{{baseUrl}}/jobs",
+            "description": "A workflow job must supply a public http(s) startUrl. Schema entries are {key, label, type} with type one of string|number|price|date; extract step fields are {key, selector?, strategy?} with strategy one of text|price|json_ld|shopify_json."
           }
         },
         {
@@ -132,6 +151,32 @@
           "request": {
             "method": "DELETE",
             "url": "{{baseUrl}}/jobs/{{jobId}}"
+          }
+        },
+        {
+          "name": "List Job Secret Keys",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs/{{jobId}}/secrets",
+            "description": "Returns key names only: {\"keys\":[{\"key\":\"TNPDCL_PASSWORD\",\"set\":true}]}. Stored values are never returned."
+          }
+        },
+        {
+          "name": "Set Job Secrets",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"values\": {\n    \"TNPDCL_PASSWORD\": \"new-password\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/jobs/{{jobId}}/secrets",
+            "description": "Write-only. Values are encrypted with SECRETS_MASTER_KEY; an omitted key keeps its stored value and a re-sent key is re-encrypted in place. Returns 409 while that job has a run in flight."
           }
         }
       ]

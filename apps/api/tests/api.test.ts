@@ -1,19 +1,27 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
-import { hashPassword } from '@billing-agent/core';
+import {
+  createBrowserLock,
+  decryptSecret,
+  hashPassword,
+  parseMasterKey,
+} from '@billing-agent/core';
 import type {
   BillingStore,
+  BrowserLock,
+  ConversationDocument,
   JobDocument,
-  PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
-  WatchDocument,
 } from '@billing-agent/core';
 import { startServer } from '../src/server.ts';
 
 const JWT_SECRET = 'test-jwt-secret';
+const MASTER_KEY_HEX = '11'.repeat(32);
+const TEST_ENV: NodeJS.ProcessEnv = { SECRETS_MASTER_KEY: MASTER_KEY_HEX };
 
 class MemoryStore implements BillingStore {
   settings: SettingsDocument = {
@@ -22,13 +30,12 @@ class MemoryStore implements BillingStore {
     mistral: { apiKeyEnv: 'MISTRAL_API_KEY', model: 'mistral-small-latest' },
     browser: { headless: true, timeoutMs: 60_000, saveErrorScreenshot: true },
     jobsGeneration: 0,
-    watchesGeneration: 0,
   };
 
   jobs = new Map<string, JobDocument>();
-  watches = new Map<string, WatchDocument>();
-  priceChecks = new Map<string, PriceCheckDocument>();
+  conversations = new Map<string, ConversationDocument>();
   runs = new Map<string, RunDocument>();
+  secrets = new Map<string, SecretDocument>();
   users = new Map<string, UserDocument>();
 
   async getSettings(): Promise<SettingsDocument> {
@@ -55,55 +62,58 @@ class MemoryStore implements BillingStore {
     this.settings = { id: 'default', ...settings };
   }
 
-  async listWatches(options?: { userId?: string }): Promise<WatchDocument[]> {
-    let watches = [...this.watches.values()];
-    if (options?.userId) {
-      watches = watches.filter((watch) => watch.userId === options.userId);
+  async upsertSecret(secret: SecretDocument): Promise<void> {
+    this.secrets.set(secret.id, secret);
+  }
+
+  async listSecrets(options: {
+    userId: string;
+    jobId?: string;
+    conversationId?: string;
+  }): Promise<SecretDocument[]> {
+    let secrets = [...this.secrets.values()].filter(
+      (secret) => secret.userId === options.userId,
+    );
+    if (options.jobId !== undefined) {
+      secrets = secrets.filter((secret) => secret.jobId === options.jobId);
     }
-    return watches;
+    if (options.conversationId !== undefined) {
+      secrets = secrets.filter(
+        (secret) => secret.conversationId === options.conversationId,
+      );
+    }
+    return secrets.sort((a, b) => a.key.localeCompare(b.key));
   }
 
-  async getWatch(id: string): Promise<WatchDocument | null> {
-    return this.watches.get(id) ?? null;
-  }
-
-  async upsertWatch(watch: WatchDocument): Promise<void> {
-    this.watches.set(watch.id, watch);
-  }
-
-  async deleteWatch(id: string): Promise<void> {
-    this.watches.delete(id);
-    for (const [checkId, check] of this.priceChecks.entries()) {
-      if (check.watchId === id) {
-        this.priceChecks.delete(checkId);
+  async deleteSecretsForJob(jobId: string): Promise<void> {
+    for (const [id, secret] of this.secrets.entries()) {
+      if (secret.jobId === jobId) {
+        this.secrets.delete(id);
       }
     }
   }
 
-  async createPriceCheck(check: PriceCheckDocument): Promise<void> {
-    this.priceChecks.set(check.id, check);
+  async upsertConversation(conversation: ConversationDocument): Promise<void> {
+    this.conversations.set(conversation.id, conversation);
   }
 
-  async finishPriceCheck(id: string, update: Partial<PriceCheckDocument>): Promise<void> {
-    const current = this.priceChecks.get(id);
-    if (!current) return;
-    this.priceChecks.set(id, { ...current, ...update });
+  async getConversation(id: string): Promise<ConversationDocument | null> {
+    return this.conversations.get(id) ?? null;
   }
 
-  async listPriceChecks(options: {
-    watchId: string;
+  async listConversations(options?: {
     userId?: string;
-    limit?: number;
-  }): Promise<PriceCheckDocument[]> {
-    let checks = [...this.priceChecks.values()].filter((check) => check.watchId === options.watchId);
-    if (options.userId) {
-      checks = checks.filter((check) => check.userId === options.userId);
+    status?: ConversationDocument['status'] | ConversationDocument['status'][];
+  }): Promise<ConversationDocument[]> {
+    let conversations = [...this.conversations.values()];
+    if (options?.userId) {
+      conversations = conversations.filter((c) => c.userId === options.userId);
     }
-    checks.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt));
-    if (options.limit && options.limit > 0) {
-      return checks.slice(0, options.limit);
+    if (options?.status !== undefined) {
+      const allowed = Array.isArray(options.status) ? options.status : [options.status];
+      conversations = conversations.filter((c) => allowed.includes(c.status));
     }
-    return checks;
+    return conversations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async listActiveOverlays(): Promise<[]> {
@@ -190,6 +200,71 @@ async function login(
   return { status: response.status, body: await response.json() };
 }
 
+function canonicalAdapterJob(overrides: Partial<JobDocument> = {}): JobDocument {
+  const now = new Date().toISOString();
+  return {
+    id: 'home-eb',
+    userId: 'unset',
+    name: 'Home EB bill',
+    enabled: true,
+    schedule: null,
+    startUrl: 'https://www.tnebnet.org/awp/login',
+    engine: 'adapter',
+    adapterId: 'dummy',
+    goal: 'Read the latest bill',
+    schema: [],
+    workflow: [],
+    secretIds: [],
+    notify: { title: 'Bill', on: 'always', channel: { type: 'ntfy', topic: 'bills' } },
+    lastResult: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function canonicalJobPayload(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: 'home-eb',
+    name: 'Home EB bill',
+    enabled: true,
+    schedule: null,
+    startUrl: 'https://www.tnebnet.org/awp/login',
+    engine: 'adapter',
+    adapterId: 'dummy',
+    goal: 'Read the latest bill',
+    schema: [],
+    workflow: [],
+    secretIds: [],
+    notify: { title: 'Bill', on: 'always', channel: { type: 'ntfy', topic: 'bills' } },
+    ...overrides,
+  };
+}
+
+function canonicalRun(overrides: Partial<RunDocument> = {}): RunDocument {
+  return {
+    id: 'run-1',
+    jobId: 'home-eb',
+    userId: 'unset',
+    engine: 'adapter',
+    adapterId: 'dummy',
+    status: 'success',
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    durationMs: 100,
+    errorCode: null,
+    errorMessage: null,
+    screenshotPath: null,
+    recoveryAttempted: false,
+    recoverySucceeded: false,
+    overlayActivated: false,
+    result: null,
+    ...overrides,
+  };
+}
+
 const handles: Array<{ close: () => Promise<void> }> = [];
 
 afterEach(async () => {
@@ -201,8 +276,9 @@ afterEach(async () => {
 async function setupAuthedServer(options?: {
   store?: MemoryStore;
   onRunJob?: (jobId: string) => Promise<string>;
-  onRunWatch?: (watchId: string) => Promise<string>;
   corsOrigins?: string[];
+  env?: NodeJS.ProcessEnv;
+  lock?: BrowserLock;
 }): Promise<{
   handle: { port: number; close: () => Promise<void> };
   store: MemoryStore;
@@ -216,8 +292,9 @@ async function setupAuthedServer(options?: {
     jwtSecret: JWT_SECRET,
     store,
     onRunJob: options?.onRunJob,
-    onRunWatch: options?.onRunWatch,
     corsOrigins: options?.corsOrigins,
+    env: options?.env ?? TEST_ENV,
+    lock: options?.lock,
   });
   handles.push(handle);
 
@@ -302,14 +379,9 @@ describe('api server', () => {
         Authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'smoke-test',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'Smoke' },
-      }),
+      body: JSON.stringify(
+        canonicalJobPayload({ id: 'smoke-test', name: 'Smoke', notify: { title: 'Smoke', on: 'always', channel: { type: 'ntfy', topic: 'bills' } } }),
+      ),
     });
     assert.equal(created.status, 201);
     const createdJob = (await created.json()) as JobDocument;
@@ -334,19 +406,1186 @@ describe('api server', () => {
         Authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'spoofed-owner',
-        userId: 'someone-else',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'Spoofed' },
-      }),
+      body: JSON.stringify(
+        canonicalJobPayload({ id: 'spoofed-owner', userId: 'someone-else' }),
+      ),
     });
     assert.equal(created.status, 201);
     const createdJob = (await created.json()) as JobDocument;
     assert.equal(createdJob.userId, user.id);
+  });
+});
+
+describe('POST /jobs canonical shape', () => {
+  it('accepts a canonical adapter job and stores the canonical fields', async () => {
+    const { handle, store, user, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'tnebnet-org-a1b2',
+          adapterId: 'tnpdcl',
+          schema: [{ key: 'amount', label: 'Amount', type: 'price' }],
+          notify: {
+            title: 'EB bill',
+            on: 'change',
+            channel: { type: 'ntfy', topic: 'bills' },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument & Record<string, unknown>;
+    assert.equal(created.engine, 'adapter');
+    assert.equal(created.adapterId, 'tnpdcl');
+    assert.equal(created.userId, user.id);
+    assert.equal(created.startUrl, 'https://www.tnebnet.org/awp/login');
+    assert.deepEqual(created.schema, [{ key: 'amount', label: 'Amount', type: 'price' }]);
+    assert.deepEqual(created.notify, {
+      title: 'EB bill',
+      on: 'change',
+      channel: { type: 'ntfy', topic: 'bills' },
+    });
+    assert.equal('provider' in created, false);
+    assert.equal('credentialsEnv' in created, false);
+
+    const stored = await store.getJob('tnebnet-org-a1b2');
+    assert.equal(stored?.engine, 'adapter');
+    assert.equal(stored?.adapterId, 'tnpdcl');
+  });
+
+  it('accepts a canonical workflow job with workflow steps', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'sivadass-in-b2c3',
+          engine: 'workflow',
+          adapterId: undefined,
+          startUrl: 'https://sivadass.in/',
+          workflow: [
+            { id: 's1', type: 'goto', url: 'https://sivadass.in/' },
+            {
+              id: 's2',
+              type: 'extract',
+              fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+            },
+          ],
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'workflow');
+    assert.equal(created.workflow.length, 2);
+    assert.equal(created.adapterId, undefined);
+
+    const stored = await store.getJob('sivadass-in-b2c3');
+    assert.equal(stored?.workflow.length, 2);
+  });
+
+  it('returns 400 for an unknown engine', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload({ id: 'bad-engine', engine: 'magic' })),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('bad-engine'), null);
+  });
+
+  it('returns 400 for a malformed engine value', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload({ id: 'bad-engine-2', engine: 7 })),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it('returns 400 when an adapter job has no adapterId', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({ id: 'no-adapter', adapterId: undefined }),
+      ),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it('returns 400 for a job id containing a path separator', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload({ id: 'home-eb/secrets' })),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  it('returns 400 for a malformed workflow step', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'bad-workflow',
+          engine: 'workflow',
+          adapterId: undefined,
+          workflow: [{ id: 's1', type: 'teleport', url: 'https://sivadass.in/' }],
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 400);
+  });
+
+  // Write-time validation shares `validateWorkflow` with the interpreter, so
+  // every workflow the runner would refuse to execute is a 400 here instead of
+  // a job that fails on its first scheduled tick.
+  it('returns 400 for every workflow the interpreter would refuse to run', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+    const extract = {
+      id: 'read-email',
+      type: 'extract',
+      fields: [{ key: 'email', selector: 'a[href^="mailto:"]', strategy: 'text' }],
+    };
+    const cases: Array<[string, unknown]> = [
+      ['goto protocol', [{ id: 'g', type: 'goto', url: 'javascript:alert(1)' }, extract]],
+      ['goto private host', [{ id: 'g', type: 'goto', url: 'http://127.0.0.1/' }, extract]],
+      ['goto relative url', [{ id: 'g', type: 'goto', url: '/products' }, extract]],
+      ['goto file authority', [{ id: 'g', type: 'goto', url: 'file://evil.example/x' }, extract]],
+      [
+        'fill secret without secretKey',
+        [{ id: 'f', type: 'fill', selector: '#p', source: 'secret' }, extract],
+      ],
+      [
+        'fill literal without value',
+        [{ id: 'f', type: 'fill', selector: '#p', source: 'literal' }, extract],
+      ],
+      [
+        'fill with an unknown source',
+        [{ id: 'f', type: 'fill', selector: '#p', source: 'env', value: 'X' }, extract],
+      ],
+      ['wait with neither selector nor timeout', [{ id: 'w', type: 'wait' }, extract]],
+      ['wait timeout zero', [{ id: 'w', type: 'wait', timeoutMs: 0 }, extract]],
+      [
+        'wait timeout beyond the cap',
+        [{ id: 'w', type: 'wait', timeoutMs: 10_000_000 }, extract],
+      ],
+      ['empty extract fields', [{ id: 'e', type: 'extract', fields: [] }]],
+      [
+        'text strategy without a selector',
+        [{ id: 'e', type: 'extract', fields: [{ key: 'email', strategy: 'text' }] }],
+      ],
+      [
+        'duplicate step ids',
+        [
+          { id: 'same', type: 'goto', url: 'https://sivadass.in/' },
+          { ...extract, id: 'same' },
+        ],
+      ],
+      [
+        'unknown step property',
+        [{ id: 's', type: 'click', selector: '#a', script: 'alert(1)' }, extract],
+      ],
+    ];
+
+    for (const [label, workflow] of cases) {
+      const id = `bad-${label.replace(/[^a-z0-9]+/gi, '-')}`;
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id,
+            engine: 'workflow',
+            adapterId: undefined,
+            startUrl: 'https://sivadass.in/',
+            workflow,
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400, label);
+      assert.equal(await store.getJob(id), null, label);
+    }
+  });
+
+  it('returns 400 for a workflow job with no extract step to replay', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    for (const [label, workflow] of [
+      ['empty', []],
+      ['navigation only', [{ id: 'g', type: 'goto', url: 'https://sivadass.in/' }]],
+    ] as Array<[string, unknown]>) {
+      const id = `no-extract-${label.replace(/\s+/g, '-')}`;
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id,
+            engine: 'workflow',
+            adapterId: undefined,
+            startUrl: 'https://sivadass.in/',
+            workflow,
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400, label);
+      assert.equal(await store.getJob(id), null, label);
+    }
+  });
+
+  it('accepts the workflow shape a migrated watch job carries', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'craftandglory-in-a1b2',
+          engine: 'workflow',
+          adapterId: undefined,
+          startUrl: 'https://craftandglory.in/products/sneakers',
+          schema: [
+            { key: 'price', label: 'Price', type: 'price' },
+            { key: 'currency', label: 'Currency', type: 'string' },
+          ],
+          workflow: [
+            {
+              id: 'goto-watch',
+              type: 'goto',
+              url: 'https://craftandglory.in/products/sneakers',
+            },
+            {
+              id: 'extract-price',
+              type: 'extract',
+              fields: [
+                { key: 'price', strategy: 'shopify_json' },
+                { key: 'currency', strategy: 'shopify_json' },
+                { key: 'price', strategy: 'price' },
+              ],
+            },
+          ],
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const stored = await store.getJob('craftandglory-in-a1b2');
+    assert.equal(stored?.workflow.length, 2);
+  });
+
+  it('keeps accepting an adapter job with an empty workflow', async () => {
+    const { handle, store, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload({ id: 'adapter-empty-workflow' })),
+    });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual((await store.getJob('adapter-empty-workflow'))?.workflow, []);
+  });
+
+  it('keeps accepting a legacy provider payload as an adapter job', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'legacy-shape',
+        provider: 'dummy',
+        enabled: true,
+        schedule: null,
+        credentialsEnv: {},
+        notify: { title: 'Legacy' },
+      }),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument & Record<string, unknown>;
+    assert.equal(created.engine, 'adapter');
+    assert.equal(created.adapterId, 'dummy');
+    assert.equal('provider' in created, false);
+    assert.equal('credentialsEnv' in created, false);
+  });
+
+  it('PATCH keeps the canonical shape and rejects a bad engine with 400', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(canonicalAdapterJob({ userId: user.id }));
+
+    const patched = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: false, notify: { title: 'Renamed', on: 'failure_only' } }),
+    });
+    assert.equal(patched.status, 200);
+    const job = (await patched.json()) as JobDocument & Record<string, unknown>;
+    assert.equal(job.enabled, false);
+    assert.equal(job.notify.title, 'Renamed');
+    assert.equal(job.notify.on, 'failure_only');
+    assert.equal(job.engine, 'adapter');
+    assert.equal('provider' in job, false);
+
+    const rejected = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ engine: 'magic' }),
+    });
+    assert.equal(rejected.status, 400);
+  });
+});
+
+describe('POST /jobs rejects malformed supplied values', () => {
+  async function postJob(
+    port: number,
+    token: string,
+    overrides: Record<string, unknown>,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(canonicalJobPayload(overrides)),
+    });
+  }
+
+  const malformed: Array<[string, Record<string, unknown>]> = [
+    ['a non-boolean enabled', { enabled: 'yes' }],
+    ['a non-string, non-null schedule', { schedule: 5 }],
+    ['a non-string adapterId', { adapterId: 7 }],
+    ['a non-string name', { name: 12 }],
+    ['a non-string goal', { goal: false }],
+    ['a non-object notify', { notify: 'Bill' }],
+    [
+      'an unknown notify.on',
+      {
+        notify: { title: 'Bill', on: 'sometimes', channel: { type: 'ntfy', topic: 'bills' } },
+      },
+    ],
+    [
+      'a non-string notify.on',
+      { notify: { title: 'Bill', on: 5, channel: { type: 'ntfy', topic: 'bills' } } },
+    ],
+    [
+      'a non-string notify.title',
+      { notify: { title: 9, on: 'always', channel: { type: 'ntfy', topic: 'bills' } } },
+    ],
+    [
+      'an unknown notify.channel type',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'carrier-pigeon' } } },
+    ],
+    [
+      'a webhook channel without a url',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'webhook' } } },
+    ],
+    [
+      'a webhook channel with an empty url',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'webhook', url: '' } } },
+    ],
+    [
+      'a non-string ntfy topic',
+      { notify: { title: 'Bill', on: 'always', channel: { type: 'ntfy', topic: 42 } } },
+    ],
+    [
+      'a non-string ntfy baseUrl',
+      {
+        notify: {
+          title: 'Bill',
+          on: 'always',
+          channel: { type: 'ntfy', topic: 'bills', baseUrl: 7 },
+        },
+      },
+    ],
+  ];
+
+  for (const [label, overrides] of malformed) {
+    it(`returns 400 for ${label}`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await postJob(handle.port, token, {
+        id: 'malformed',
+        ...overrides,
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('malformed'), null);
+    });
+  }
+
+  it('still fills omitted notify fields from the defaults', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'partial-notify',
+        engine: 'adapter',
+        adapterId: 'dummy',
+        notify: { title: 'Only a title' },
+      }),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.name, 'Only a title');
+    assert.deepEqual(created.notify, {
+      title: 'Only a title',
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
+    });
+  });
+
+  it('returns a fixed 400 for a malformed JSON body', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: '{"id": "broken",',
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'Invalid request body' });
+  });
+});
+
+describe('job URLs must pass the public-url check', () => {
+  const blockedUrls = [
+    'http://localhost:3000/private',
+    'http://127.0.0.1:8080/admin',
+    'http://10.1.2.3/internal',
+    'http://169.254.169.254/latest/meta-data/',
+    'https://printer.local/status',
+    'https://vault.internal/secret',
+    'https://user:pass@example.com/bill',
+    'file:///etc/passwd',
+    'not-a-url',
+  ];
+
+  for (const url of blockedUrls) {
+    it(`rejects startUrl ${url} with 400`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(canonicalJobPayload({ id: 'ssrf', startUrl: url })),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('ssrf'), null);
+    });
+
+    it(`rejects an ntfy notify channel whose baseUrl is ${url} with 400`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id: 'ssrf-ntfy',
+            notify: {
+              title: 'Bill',
+              on: 'always',
+              channel: { type: 'ntfy', topic: 'bills', baseUrl: url },
+            },
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('ssrf-ntfy'), null);
+    });
+
+    it(`rejects a PATCH moving the ntfy baseUrl to ${url}`, async () => {
+      const store = new MemoryStore();
+      const { handle, user, token } = await setupAuthedServer({ store });
+      const original = canonicalAdapterJob({ userId: user.id });
+      await store.upsertJob(original);
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          notify: { channel: { type: 'ntfy', topic: 'bills', baseUrl: url } },
+        }),
+      });
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(await store.getJob('home-eb'), original);
+    });
+
+    it(`rejects a webhook notify channel pointing at ${url} with 400`, async () => {
+      const store = new MemoryStore();
+      const { handle, token } = await setupAuthedServer({ store });
+
+      const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          canonicalJobPayload({
+            id: 'ssrf-webhook',
+            notify: { title: 'Bill', on: 'always', channel: { type: 'webhook', url } },
+          }),
+        ),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal(await store.getJob('ssrf-webhook'), null);
+    });
+  }
+
+  it('accepts a public ntfy baseUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'public-ntfy',
+          notify: {
+            title: 'Bill',
+            on: 'always',
+            channel: {
+              type: 'ntfy',
+              topic: 'bills',
+              baseUrl: 'https://ntfy.example.com',
+            },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.notify.channel, {
+      type: 'ntfy',
+      topic: 'bills',
+      baseUrl: 'https://ntfy.example.com',
+    });
+  });
+
+  it('accepts an ntfy channel that omits baseUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'default-ntfy',
+          notify: {
+            title: 'Bill',
+            on: 'always',
+            channel: { type: 'ntfy', topic: 'bills' },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.notify.channel, { type: 'ntfy', topic: 'bills' });
+  });
+
+  it('accepts a public https webhook channel', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'public-webhook',
+          notify: {
+            title: 'Bill',
+            on: 'always',
+            channel: { type: 'webhook', url: 'https://hooks.example.com/bill' },
+          },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.notify.channel, {
+      type: 'webhook',
+      url: 'https://hooks.example.com/bill',
+    });
+  });
+});
+
+describe('startUrl is required where the engine needs it', () => {
+  /** Minimal workflow that passes validation: navigate, then extract something. */
+  const replayableWorkflow = [
+    { id: 'open', type: 'goto', url: 'https://sivadass.in/' },
+    {
+      id: 'read-price',
+      type: 'extract',
+      fields: [{ key: 'price', selector: '.price', strategy: 'text' }],
+    },
+  ];
+
+  async function postWorkflowJob(
+    port: number,
+    token: string,
+    overrides: Record<string, unknown>,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'flow',
+        engine: 'workflow',
+        name: 'Flow',
+        goal: 'Read the price',
+        workflow: replayableWorkflow,
+        notify: { title: 'Flow', on: 'always', channel: { type: 'ntfy', topic: 'flow' } },
+        ...overrides,
+      }),
+    });
+  }
+
+  it('returns 400 when a workflow job omits startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await postWorkflowJob(handle.port, token, {});
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('flow'), null);
+  });
+
+  it('returns 400 when a workflow job sends an empty startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await postWorkflowJob(handle.port, token, { startUrl: '' });
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('flow'), null);
+  });
+
+  it('returns 400 when a workflow job sends a private startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await postWorkflowJob(handle.port, token, {
+      startUrl: 'http://127.0.0.1:9000/flow',
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(await store.getJob('flow'), null);
+  });
+
+  it('creates a workflow job with a public startUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await postWorkflowJob(handle.port, token, {
+      startUrl: 'https://sivadass.in/',
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'workflow');
+    assert.equal(created.startUrl, 'https://sivadass.in/');
+  });
+
+  it('rejects a PATCH switching an adapter job to workflow without a startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const original = canonicalAdapterJob({ userId: user.id, startUrl: '' });
+    await store.upsertJob(original);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        engine: 'workflow',
+        workflow: replayableWorkflow,
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('rejects a PATCH switching to workflow while inheriting a file:// startUrl', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/dummy-bill.html';
+    const original = canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl });
+    await store.upsertJob(original);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ engine: 'workflow' }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('allows a PATCH to workflow when a public startUrl comes with it', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(
+      canonicalAdapterJob({
+        userId: user.id,
+        startUrl: 'file:///workspace/fixtures/dummy-bill.html',
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        engine: 'workflow',
+        startUrl: 'https://sivadass.in/',
+        workflow: replayableWorkflow,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const patched = (await response.json()) as JobDocument;
+    assert.equal(patched.engine, 'workflow');
+    assert.equal(patched.startUrl, 'https://sivadass.in/');
+  });
+
+  it('keeps editing a workflow job whose startUrl is not resupplied', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/shop.html';
+    await store.upsertJob({
+      ...canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }),
+      engine: 'workflow',
+      adapterId: undefined,
+      workflow: [
+        { id: 'open', type: 'goto', url: fixtureUrl },
+        {
+          id: 'read-price',
+          type: 'extract',
+          fields: [{ key: 'price', selector: '.price', strategy: 'text' }],
+        },
+      ],
+    } as JobDocument);
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal((await store.getJob('home-eb'))?.startUrl, fixtureUrl);
+  });
+
+  it('still creates an adapter job without a startUrl', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'adapter-no-url',
+        engine: 'adapter',
+        adapterId: 'dummy',
+        notify: { title: 'Dummy Bill' },
+      }),
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(((await response.json()) as JobDocument).startUrl, '');
+  });
+});
+
+describe('the documented create-job examples match the API contract', () => {
+  // Kept byte-for-byte in step with the payloads in the root README and the
+  // Postman collection; a drift here means the docs tell callers a lie.
+  const adapterExample = {
+    id: 'smoke-test',
+    name: 'Dummy Bill',
+    engine: 'adapter',
+    adapterId: 'dummy',
+    enabled: true,
+    schedule: null,
+    notify: {
+      title: 'Dummy Bill',
+      on: 'always',
+      channel: { type: 'ntfy', topic: 'bills' },
+    },
+  };
+
+  const workflowExample = {
+    id: 'shoe-price',
+    name: 'Shoe price',
+    engine: 'workflow',
+    startUrl: 'https://sivadass.in/',
+    goal: 'Read the listed price',
+    schema: [{ key: 'price', label: 'Price', type: 'price' }],
+    workflow: [
+      { id: 'open', type: 'goto', url: 'https://sivadass.in/' },
+      {
+        id: 'read-price',
+        type: 'extract',
+        fields: [{ key: 'price', selector: '.product-price', strategy: 'price' }],
+      },
+    ],
+    notify: { title: 'Shoe price' },
+  };
+
+  async function post(
+    port: number,
+    token: string,
+    payload: Record<string, unknown>,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it('accepts the documented adapter example', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await post(handle.port, token, adapterExample);
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'adapter');
+    assert.equal(created.adapterId, 'dummy');
+  });
+
+  it('accepts the documented workflow example', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await post(handle.port, token, workflowExample);
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.equal(created.engine, 'workflow');
+    assert.equal(created.startUrl, 'https://sivadass.in/');
+    assert.deepEqual(created.schema, [
+      { key: 'price', label: 'Price', type: 'price' },
+    ]);
+    assert.equal(created.workflow.length, 2);
+  });
+
+  it('rejects the schema shape the docs used to show', async () => {
+    const { handle, token } = await setupAuthedServer();
+
+    const response = await post(handle.port, token, {
+      ...workflowExample,
+      schema: [{ name: 'price', type: 'number' }],
+    });
+
+    assert.equal(response.status, 400);
+  });
+});
+
+describe('PATCH /jobs/:id validates only what the caller supplies', () => {
+  async function patchJob(
+    port: number,
+    token: string,
+    body: Record<string, unknown>,
+    jobId = 'home-eb',
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/jobs/${jobId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('rejects malformed supplied values with 400 and leaves the job untouched', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const original = canonicalAdapterJob({ userId: user.id });
+    await store.upsertJob(original);
+
+    for (const body of [
+      { enabled: 'nope' },
+      { schedule: 12 },
+      { notify: { on: 'whenever' } },
+      { notify: { channel: { type: 'smoke-signal' } } },
+      { notify: { channel: { type: 'webhook', url: 'http://localhost/hook' } } },
+      { startUrl: 'file:///etc/passwd' },
+      { startUrl: 'http://169.254.169.254/latest/meta-data/' },
+      { startUrl: '' },
+    ]) {
+      const response = await patchJob(handle.port, token, body);
+      assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+    }
+
+    assert.deepEqual(await store.getJob('home-eb'), original);
+  });
+
+  it('refuses to clear the startUrl of a migrated fixture job', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/dummy-bill.html';
+    await store.upsertJob(canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }));
+
+    const response = await patchJob(handle.port, token, { startUrl: '' });
+
+    assert.equal(response.status, 400);
+    assert.equal((await store.getJob('home-eb'))?.startUrl, fixtureUrl);
+  });
+
+  it('keeps a migrated fixture startUrl when startUrl is not supplied', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const fixtureUrl = 'file:///workspace/fixtures/dummy-bill.html';
+    await store.upsertJob(
+      canonicalAdapterJob({ userId: user.id, startUrl: fixtureUrl }),
+    );
+
+    const response = await patchJob(handle.port, token, { enabled: false });
+    assert.equal(response.status, 200);
+    const patched = (await response.json()) as JobDocument;
+    assert.equal(patched.enabled, false);
+    assert.equal(patched.startUrl, fixtureUrl);
+    assert.equal((await store.getJob('home-eb'))?.startUrl, fixtureUrl);
+  });
+
+  it('accepts a public startUrl and stores it', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(canonicalAdapterJob({ userId: user.id }));
+
+    const response = await patchJob(handle.port, token, {
+      startUrl: 'https://www.tnebnet.org/awp/login2',
+    });
+    assert.equal(response.status, 200);
+    assert.equal(
+      (await store.getJob('home-eb'))?.startUrl,
+      'https://www.tnebnet.org/awp/login2',
+    );
+  });
+
+  it('ignores client attempts to set secretIds, lastResult, or timestamps', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(
+      canonicalAdapterJob({
+        userId: user.id,
+        secretIds: ['secret-owned'],
+        lastResult: { amount: 10 },
+        createdAt: '2020-01-01T00:00:00.000Z',
+      }),
+    );
+
+    const response = await patchJob(handle.port, token, {
+      secretIds: ['injected-secret'],
+      lastResult: { amount: 999999 },
+      createdAt: '1999-01-01T00:00:00.000Z',
+      userId: 'someone-else',
+    });
+    assert.equal(response.status, 200);
+
+    const stored = await store.getJob('home-eb');
+    assert.deepEqual(stored?.secretIds, ['secret-owned']);
+    assert.deepEqual(stored?.lastResult, { amount: 10 });
+    assert.equal(stored?.createdAt, '2020-01-01T00:00:00.000Z');
+    assert.equal(stored?.userId, user.id);
+  });
+
+  it('ignores client-supplied secretIds and lastResult on create', async () => {
+    const store = new MemoryStore();
+    const { handle, token } = await setupAuthedServer({ store });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        canonicalJobPayload({
+          id: 'injected',
+          secretIds: ['injected-secret'],
+          lastResult: { amount: 999999 },
+        }),
+      ),
+    });
+
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as JobDocument;
+    assert.deepEqual(created.secretIds, []);
+    assert.equal(created.lastResult, null);
+  });
+});
+
+describe('runs expose the generic result', () => {
+  it('returns result and never billSummary or provider', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const run = canonicalRun({
+      id: 'run-generic',
+      userId: user.id,
+      result: { amount: 1234.5, dueDate: '2026-09-01' },
+    });
+    await store.createRun({
+      ...run,
+      // A document written before the migration can still carry these keys.
+      provider: 'dummy',
+      billSummary: { total: '1234.5' },
+    } as RunDocument);
+
+    const detail = await fetch(`http://127.0.0.1:${handle.port}/runs/run-generic`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(detail.status, 200);
+    const detailText = await detail.text();
+    assert.equal(detailText.includes('billSummary'), false);
+    assert.equal(detailText.includes('provider'), false);
+    const detailBody = JSON.parse(detailText) as RunDocument;
+    assert.deepEqual(detailBody.result, { amount: 1234.5, dueDate: '2026-09-01' });
+    assert.equal(detailBody.engine, 'adapter');
+    assert.equal(detailBody.adapterId, 'dummy');
+
+    const list = await fetch(`http://127.0.0.1:${handle.port}/runs`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(list.status, 200);
+    const listText = await list.text();
+    assert.equal(listText.includes('billSummary'), false);
+    const runs = JSON.parse(listText) as RunDocument[];
+    assert.equal(runs.length, 1);
+    assert.deepEqual(runs[0]?.result, { amount: 1234.5, dueDate: '2026-09-01' });
   });
 });
 
@@ -365,14 +1604,7 @@ describe('cross-user isolation', () => {
         Authorization: `Bearer ${tokenA}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'a-only-job',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'A only' },
-      }),
+      body: JSON.stringify(canonicalJobPayload({ id: 'a-only-job' })),
     });
     assert.equal(created.status, 201);
 
@@ -396,14 +1628,7 @@ describe('cross-user isolation', () => {
         Authorization: `Bearer ${tokenA}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'a-only-job-2',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'A only 2' },
-      }),
+      body: JSON.stringify(canonicalJobPayload({ id: 'a-only-job-2' })),
     });
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
@@ -428,14 +1653,7 @@ describe('cross-user isolation', () => {
         Authorization: `Bearer ${tokenA}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'a-only-job-3',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'A only 3' },
-      }),
+      body: JSON.stringify(canonicalJobPayload({ id: 'a-only-job-3' })),
     });
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/a-only-job-3`, {
@@ -463,14 +1681,7 @@ describe('cross-user isolation', () => {
         Authorization: `Bearer ${tokenA}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'a-only-job-4',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'A only 4' },
-      }),
+      body: JSON.stringify(canonicalJobPayload({ id: 'a-only-job-4' })),
     });
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/a-only-job-4`, {
@@ -497,14 +1708,7 @@ describe('cross-user isolation', () => {
         Authorization: `Bearer ${tokenA}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        id: 'a-only-job-5',
-        provider: 'dummy',
-        enabled: true,
-        schedule: null,
-        credentialsEnv: {},
-        notify: { title: 'A only 5' },
-      }),
+      body: JSON.stringify(canonicalJobPayload({ id: 'a-only-job-5' })),
     });
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/a-only-job-5/run`, {
@@ -522,23 +1726,9 @@ describe('cross-user isolation', () => {
     const tokenB = loginB.body.token;
     if (!tokenB) throw new Error('login for user B failed');
 
-    await store.createRun({
-      id: 'a-only-run',
-      jobId: 'a-only-job',
-      userId: userA.id,
-      provider: 'dummy',
-      status: 'success',
-      startedAt: new Date().toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationMs: 100,
-      errorCode: null,
-      errorMessage: null,
-      screenshotPath: null,
-      recoveryAttempted: false,
-      recoverySucceeded: false,
-      overlayActivated: false,
-      billSummary: null,
-    });
+    await store.createRun(
+      canonicalRun({ id: 'a-only-run', jobId: 'a-only-job', userId: userA.id }),
+    );
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/runs/a-only-run`, {
       headers: { Authorization: `Bearer ${tokenB}` },
@@ -549,6 +1739,42 @@ describe('cross-user isolation', () => {
       headers: { Authorization: `Bearer ${tokenA}` },
     });
     assert.equal(ownResponse.status, 200);
+  });
+
+  it('attaches a presigned screenshot URL for B2 run keys', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      env: {
+        ...TEST_ENV,
+        B2_ACCESS_KEY_ID: 'test-key',
+        B2_SECRET_ACCESS_KEY: 'test-secret',
+        B2_BUCKET_NAME: 'notepad-attachments',
+        B2_ENDPOINT: 'https://s3.us-east-005.backblazeb2.com',
+      },
+    });
+    const key = 'billing-agent/runs/run-shot/1.png';
+    await store.createRun(
+      canonicalRun({
+        id: 'run-shot',
+        jobId: 'home-eb',
+        userId: user.id,
+        status: 'failed',
+        screenshotPath: key,
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/runs/run-shot`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      screenshotPath?: string;
+      screenshotUrl?: string;
+    };
+    assert.equal(body.screenshotPath, key);
+    assert.match(body.screenshotUrl ?? '', /X-Amz-Signature=/);
+    assert.match(body.screenshotUrl ?? '', /billing-agent\/runs\/run-shot\/1\.png/);
   });
 });
 
@@ -630,15 +1856,7 @@ describe('api CORS', () => {
 
 describe('POST /jobs/:id/run', () => {
   function enabledJobFor(userId: string): JobDocument {
-    return {
-      id: 'home-eb',
-      userId,
-      provider: 'dummy',
-      enabled: true,
-      schedule: null,
-      credentialsEnv: {},
-      notify: { title: 'Bill' },
-    };
+    return canonicalAdapterJob({ userId });
   }
 
   it('returns 503 when onRunJob is not configured', async () => {
@@ -704,23 +1922,16 @@ describe('POST /jobs/:id/run', () => {
       onRunJob: async () => 'run-x',
     });
     await store.upsertJob(enabledJobFor(user.id));
-    await store.createRun({
-      id: 'existing',
-      jobId: 'home-eb',
-      userId: user.id,
-      provider: 'dummy',
-      status: 'running',
-      startedAt: new Date().toISOString(),
-      finishedAt: null,
-      durationMs: null,
-      errorCode: null,
-      errorMessage: null,
-      screenshotPath: null,
-      recoveryAttempted: false,
-      recoverySucceeded: false,
-      overlayActivated: false,
-      billSummary: null,
-    });
+    await store.createRun(
+      canonicalRun({
+        id: 'existing',
+        jobId: 'home-eb',
+        userId: user.id,
+        status: 'running',
+        finishedAt: null,
+        durationMs: null,
+      }),
+    );
 
     const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
       method: 'POST',
@@ -728,192 +1939,493 @@ describe('POST /jobs/:id/run', () => {
     });
     assert.equal(response.status, 409);
   });
+
+  it('returns 409 Browser busy when an authoring session holds the browser lock', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: 'conversation-1' });
+    let runStarts = 0;
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => {
+        runStarts += 1;
+        return 'run-x';
+      },
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Browser busy' });
+    assert.equal(runStarts, 0);
+  });
+
+  it('returns 409 Browser busy when another job run holds the browser lock', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'run', id: 'run-elsewhere' });
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => 'run-x',
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Browser busy' });
+  });
+
+  it('starts the run once the lock is released', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: 'conversation-1' });
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => 'run-123',
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+    const url = `http://127.0.0.1:${handle.port}/jobs/home-eb/run`;
+    const headers = { Authorization: `Bearer ${token}` };
+
+    assert.equal((await fetch(url, { method: 'POST', headers })).status, 409);
+
+    lock.release('conversation-1');
+
+    const response = await fetch(url, { method: 'POST', headers });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { id: 'run-123' });
+  });
+
+  it('answers 409 Browser busy when the runner loses the lock race', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock: createBrowserLock(),
+      onRunJob: async () => {
+        throw new Error('Browser busy');
+      },
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Browser busy' });
+  });
+
+  it('keeps the per-job "already running" 409 ahead of the lock check', async () => {
+    const store = new MemoryStore();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'run', id: 'run-for-this-job' });
+    const { handle, user, token } = await setupAuthedServer({
+      store,
+      lock,
+      onRunJob: async () => 'run-x',
+    });
+    await store.upsertJob(enabledJobFor(user.id));
+    await store.createRun(
+      canonicalRun({
+        id: 'existing',
+        jobId: 'home-eb',
+        userId: user.id,
+        status: 'running',
+        finishedAt: null,
+        durationMs: null,
+      }),
+    );
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/run`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Job already running' });
+  });
 });
 
-describe('watches api', () => {
-  function buildWatchPayload() {
-    return {
-      id: 'watch-home',
-      url: 'https://example.com/products/demo',
-      title: 'Demo watch',
-      enabled: true,
-      schedule: '0 9 * * *',
-    };
+describe('job secrets api', () => {
+  async function setupJobWithSecrets(options?: { env?: NodeJS.ProcessEnv }) {
+    const store = new MemoryStore();
+    const context = await setupAuthedServer({ store, env: options?.env });
+    await store.upsertJob(canonicalAdapterJob({ userId: context.user.id }));
+    return { ...context, store };
   }
 
-  it('creates a watch and lists it for the owner', async () => {
-    const { handle, user, token } = await setupAuthedServer();
-    const created = await fetch(`http://127.0.0.1:${handle.port}/watches`, {
-      method: 'POST',
+  function secretsUrl(port: number, jobId = 'home-eb'): string {
+    return `http://127.0.0.1:${port}/jobs/${jobId}/secrets`;
+  }
+
+  async function putSecrets(
+    port: number,
+    token: string,
+    values: unknown,
+    jobId = 'home-eb',
+  ): Promise<Response> {
+    return fetch(secretsUrl(port, jobId), {
+      method: 'PUT',
       headers: {
         Authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ ...buildWatchPayload(), userId: 'spoofed' }),
+      body: JSON.stringify({ values }),
     });
-    assert.equal(created.status, 201);
-    const watch = (await created.json()) as WatchDocument;
-    assert.equal(watch.userId, user.id);
-    assert.equal(watch.schedule, '0 9 * * *');
-    assert.equal(watch.lastPrice, null);
+  }
 
-    const listed = await fetch(`http://127.0.0.1:${handle.port}/watches`, {
+  it('GET returns an empty key list for a job with no secrets', async () => {
+    const { handle, token } = await setupJobWithSecrets();
+
+    const response = await fetch(secretsUrl(handle.port), {
       headers: { Authorization: `Bearer ${token}` },
     });
-    assert.equal(listed.status, 200);
-    const watches = (await listed.json()) as WatchDocument[];
-    assert.equal(watches.length, 1);
-    assert.equal(watches[0]?.id, watch.id);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { keys: [] });
   });
 
-  it('rejects non-public watch urls with 400', async () => {
-    const { handle, token } = await setupAuthedServer();
-    const response = await fetch(`http://127.0.0.1:${handle.port}/watches`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        id: 'watch-localhost',
-        url: 'http://localhost:3000/private',
-      }),
+  it('GET /jobs/:id/secrets is not shadowed by the job detail route', async () => {
+    const { handle, token } = await setupJobWithSecrets();
+
+    const secrets = await fetch(secretsUrl(handle.port), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const secretsBody = (await secrets.json()) as Record<string, unknown>;
+    assert.equal('keys' in secretsBody, true);
+    assert.equal('engine' in secretsBody, false);
+    assert.equal('id' in secretsBody, false);
+
+    const job = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(job.status, 200);
+    assert.equal(((await job.json()) as JobDocument).id, 'home-eb');
+  });
+
+  it('PUT encrypts values and GET reports only which keys are set', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    const put = await putSecrets(handle.port, token, {
+      username: 'eb-user',
+      password: 'sup3r-secret',
+    });
+    assert.equal(put.status, 200);
+    const putText = await put.text();
+    assert.equal(putText.includes('sup3r-secret'), false);
+    assert.deepEqual(JSON.parse(putText), {
+      keys: [
+        { key: 'password', set: true },
+        { key: 'username', set: true },
+      ],
+    });
+
+    const stored = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    assert.equal(stored.length, 2);
+    const password = stored.find((secret) => secret.key === 'password');
+    assert.ok(password);
+    assert.notEqual(password.ciphertext, 'sup3r-secret');
+    assert.equal(password.conversationId, null);
+    assert.equal(password.userId, user.id);
+    assert.equal(
+      decryptSecret(password, parseMasterKey(TEST_ENV)),
+      'sup3r-secret',
+    );
+
+    const get = await fetch(secretsUrl(handle.port), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const getText = await get.text();
+    assert.equal(getText.includes('sup3r-secret'), false);
+    assert.equal(getText.includes('ciphertext'), false);
+    assert.equal(getText.includes('"iv"'), false);
+    assert.equal(getText.includes('tag'), false);
+    assert.deepEqual(JSON.parse(getText), {
+      keys: [
+        { key: 'password', set: true },
+        { key: 'username', set: true },
+      ],
+    });
+  });
+
+  it('PUT records the secret ids on the job so the runner can decrypt them', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    await putSecrets(handle.port, token, { password: 'first-password' });
+
+    const stored = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    assert.equal(stored.length, 1);
+    const job = await store.getJob('home-eb');
+    assert.deepEqual(job?.secretIds, stored.map((secret) => secret.id));
+  });
+
+  it('PUT re-encrypts the same (jobId, key) row on a password change', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    await putSecrets(handle.port, token, { password: 'first-password' });
+    const first = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    assert.equal(first.length, 1);
+
+    const second = await putSecrets(handle.port, token, { password: 'second-password' });
+    assert.equal(second.status, 200);
+
+    const after = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    assert.equal(after.length, 1);
+    assert.equal(after[0]?.id, first[0]?.id);
+    assert.equal(after[0]?.createdAt, first[0]?.createdAt);
+    assert.notEqual(after[0]?.ciphertext, first[0]?.ciphertext);
+    assert.equal(
+      decryptSecret(after[0]!, parseMasterKey(TEST_ENV)),
+      'second-password',
+    );
+
+    const job = await store.getJob('home-eb');
+    assert.deepEqual(job?.secretIds, [first[0]?.id]);
+  });
+
+  it('PUT leaves omitted keys untouched', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    await putSecrets(handle.port, token, {
+      username: 'eb-user',
+      password: 'first-password',
+    });
+    const before = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    const usernameBefore = before.find((secret) => secret.key === 'username');
+
+    const response = await putSecrets(handle.port, token, { password: 'second-password' });
+    assert.equal(response.status, 200);
+
+    const after = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    assert.equal(after.length, 2);
+    const usernameAfter = after.find((secret) => secret.key === 'username');
+    assert.deepEqual(usernameAfter, usernameBefore);
+    assert.equal(
+      decryptSecret(
+        after.find((secret) => secret.key === 'password')!,
+        parseMasterKey(TEST_ENV),
+      ),
+      'second-password',
+    );
+  });
+
+  it('PUT with an empty values object is a no-op that returns the current keys', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+    await putSecrets(handle.port, token, { password: 'first-password' });
+    const before = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+
+    const response = await putSecrets(handle.port, token, {});
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { keys: [{ key: 'password', set: true }] });
+    assert.deepEqual(
+      await store.listSecrets({ userId: user.id, jobId: 'home-eb' }),
+      before,
+    );
+  });
+
+  it('PUT rejects an empty string value with 400 and persists nothing', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    const response = await putSecrets(handle.port, token, {
+      username: 'eb-user',
+      password: '',
     });
     assert.equal(response.status, 400);
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
+    );
   });
 
-  it('returns 404 when another user requests a watch they do not own', async () => {
-    const store = new MemoryStore();
-    const { handle, user, token } = await setupAuthedServer({ store });
-    const otherUser = await createUser(store, 'watch-other@example.com', 'other-password');
-    const loginOther = await login(handle.port, otherUser.email, 'other-password');
-    const otherToken = loginOther.body.token;
+  it('PUT rejects a non-string value with 400', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    const response = await putSecrets(handle.port, token, { password: 12345 });
+    assert.equal(response.status, 400);
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
+    );
+  });
+
+  it('PUT rejects a missing or malformed values object with 400', async () => {
+    const { handle, token } = await setupJobWithSecrets();
+
+    const missing = await fetch(secretsUrl(handle.port), {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 400);
+
+    const arrayValues = await putSecrets(handle.port, token, ['password']);
+    assert.equal(arrayValues.status, 400);
+  });
+
+  it('answers a malformed JSON body with a fixed message that echoes nothing', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+
+    const response = await fetch(secretsUrl(handle.port), {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: '{"values": {"password": "hunter2"',
+    });
+
+    assert.equal(response.status, 400);
+    const text = await response.text();
+    assert.equal(text.includes('hunter2'), false);
+    assert.equal(text.includes('password'), false);
+    assert.deepEqual(JSON.parse(text), { error: 'Invalid request body' });
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
+    );
+  });
+
+  it('keeps one user two jobs isolated from each other', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+    await store.upsertJob(
+      canonicalAdapterJob({ id: 'second-job', userId: user.id }),
+    );
+
+    await putSecrets(handle.port, token, { password: 'first-job-password' });
+
+    const otherJobKeys = await fetch(secretsUrl(handle.port, 'second-job'), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(otherJobKeys.status, 200);
+    assert.deepEqual(await otherJobKeys.json(), { keys: [] });
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'second-job' })).length,
+      0,
+    );
+
+    const secondPut = await putSecrets(
+      handle.port,
+      token,
+      { password: 'second-job-password' },
+      'second-job',
+    );
+    assert.equal(secondPut.status, 200);
+
+    const first = await store.listSecrets({ userId: user.id, jobId: 'home-eb' });
+    const second = await store.listSecrets({ userId: user.id, jobId: 'second-job' });
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
+    assert.notEqual(first[0]?.id, second[0]?.id);
+    const masterKey = parseMasterKey(TEST_ENV);
+    assert.equal(decryptSecret(first[0]!, masterKey), 'first-job-password');
+    assert.equal(decryptSecret(second[0]!, masterKey), 'second-job-password');
+    assert.deepEqual((await store.getJob('home-eb'))?.secretIds, [first[0]?.id]);
+    assert.deepEqual((await store.getJob('second-job'))?.secretIds, [second[0]?.id]);
+  });
+
+  it('returns 404 for a missing job', async () => {
+    const { handle, token } = await setupJobWithSecrets();
+
+    const get = await fetch(secretsUrl(handle.port, 'nope'), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(get.status, 404);
+
+    const put = await putSecrets(handle.port, token, { password: 'x' }, 'nope');
+    assert.equal(put.status, 404);
+  });
+
+  it('returns 404 for another user job and never writes their secrets', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+    const other = await createUser(store, 'secret-other@example.com', 'other-password');
+    const otherLogin = await login(handle.port, other.email, 'other-password');
+    const otherToken = otherLogin.body.token;
     if (!otherToken) throw new Error('other user login failed');
 
-    await store.upsertWatch({
-      ...buildWatchPayload(),
-      id: 'watch-owner-only',
-      userId: user.id,
-      createdAt: new Date().toISOString(),
-      lastPrice: null,
-      lastCurrency: null,
-      lastSource: null,
-      lastCheckedAt: null,
+    const get = await fetch(secretsUrl(handle.port), {
+      headers: { Authorization: `Bearer ${otherToken}` },
     });
+    assert.equal(get.status, 404);
 
-    const response = await fetch(
-      `http://127.0.0.1:${handle.port}/watches/watch-owner-only`,
-      {
-        headers: { Authorization: `Bearer ${otherToken}` },
-      },
+    const put = await putSecrets(handle.port, otherToken, { password: 'stolen' });
+    assert.equal(put.status, 404);
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
     );
-    assert.equal(response.status, 404);
+    assert.equal(
+      (await store.listSecrets({ userId: other.id, jobId: 'home-eb' })).length,
+      0,
+    );
   });
 
-  it('check-now returns 202 when onRunWatch reports a check id', async () => {
-    const store = new MemoryStore();
-    const { handle, user, token } = await setupAuthedServer({
-      store,
-      onRunWatch: async () => 'check-123',
-    });
-    await store.upsertWatch({
-      ...buildWatchPayload(),
-      id: 'watch-202',
-      userId: user.id,
-      createdAt: new Date().toISOString(),
-      lastPrice: null,
-      lastCurrency: null,
-      lastSource: null,
-      lastCheckedAt: null,
-      enabled: false,
-    });
-
-    const response = await fetch(`http://127.0.0.1:${handle.port}/watches/watch-202/check`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(response.status, 202);
-    assert.deepEqual(await response.json(), { id: 'check-123' });
-  });
-
-  it('check-now returns 409 when a watch already has a running check', async () => {
-    const store = new MemoryStore();
-    const { handle, user, token } = await setupAuthedServer({
-      store,
-      onRunWatch: async () => 'check-x',
-    });
-    await store.upsertWatch({
-      ...buildWatchPayload(),
-      id: 'watch-running',
-      userId: user.id,
-      createdAt: new Date().toISOString(),
-      lastPrice: null,
-      lastCurrency: null,
-      lastSource: null,
-      lastCheckedAt: null,
-    });
-    await store.createPriceCheck({
-      id: 'check-running',
-      watchId: 'watch-running',
-      userId: user.id,
-      status: 'running',
-      price: null,
-      currency: null,
-      source: null,
-      previousPrice: null,
-      dropped: null,
-      error: null,
-      checkedAt: new Date().toISOString(),
-    });
-
-    const response = await fetch(
-      `http://127.0.0.1:${handle.port}/watches/watch-running/check`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      },
+  it('PUT returns 409 while the job has a running run', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+    await store.createRun(
+      canonicalRun({
+        id: 'run-in-flight',
+        jobId: 'home-eb',
+        userId: user.id,
+        status: 'running',
+        finishedAt: null,
+        durationMs: null,
+      }),
     );
+
+    const response = await putSecrets(handle.port, token, { password: 'while-running' });
     assert.equal(response.status, 409);
-    assert.deepEqual(await response.json(), { error: 'Watch already running' });
-  });
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
+    );
 
-  it('delete watch cascades checks and bumps watchesGeneration', async () => {
-    const store = new MemoryStore();
-    const { handle, user, token } = await setupAuthedServer({ store });
-    await store.upsertWatch({
-      ...buildWatchPayload(),
-      id: 'watch-delete',
-      userId: user.id,
-      createdAt: new Date().toISOString(),
-      lastPrice: null,
-      lastCurrency: null,
-      lastSource: null,
-      lastCheckedAt: null,
-    });
-    await store.createPriceCheck({
-      id: 'check-delete',
-      watchId: 'watch-delete',
-      userId: user.id,
-      status: 'success',
-      price: 100,
-      currency: 'INR',
-      source: 'shopify_json',
-      previousPrice: null,
-      dropped: false,
-      error: null,
-      checkedAt: new Date().toISOString(),
-    });
-
-    const before = store.settings.watchesGeneration;
-    const deleted = await fetch(`http://127.0.0.1:${handle.port}/watches/watch-delete`, {
-      method: 'DELETE',
+    const get = await fetch(secretsUrl(handle.port), {
       headers: { Authorization: `Bearer ${token}` },
     });
-    assert.equal(deleted.status, 200);
+    assert.equal(get.status, 200);
+  });
 
-    assert.equal(await store.getWatch('watch-delete'), null);
-    const checks = await store.listPriceChecks({ watchId: 'watch-delete', userId: user.id });
-    assert.equal(checks.length, 0);
-    assert.equal(store.settings.watchesGeneration, before + 1);
+  it('PUT ignores a run of another job when checking for a running run', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets();
+    await store.createRun(
+      canonicalRun({
+        id: 'other-job-run',
+        jobId: 'another-job',
+        userId: user.id,
+        status: 'running',
+        finishedAt: null,
+        durationMs: null,
+      }),
+    );
+
+    const response = await putSecrets(handle.port, token, { password: 'ok' });
+    assert.equal(response.status, 200);
+  });
+
+  it('fails without leaking the value when the master key is missing', async () => {
+    const { handle, store, user, token } = await setupJobWithSecrets({ env: {} });
+
+    const response = await putSecrets(handle.port, token, { password: 'never-stored' });
+    assert.equal(response.status, 500);
+    const text = await response.text();
+    assert.equal(text.includes('never-stored'), false);
+    assert.equal(
+      (await store.listSecrets({ userId: user.id, jobId: 'home-eb' })).length,
+      0,
+    );
   });
 });

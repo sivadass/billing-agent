@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import { Mistral } from '@mistralai/mistralai';
 import type { BillingAdapter, BillResult } from './adapters/types.js';
 import { getAdapter } from './adapters/registry.js';
+import type { BrowserLock } from './browser-lock.js';
 import { withBrowser } from './browser.js';
 import { createMistralCaptchaSolver, type CaptchaSolver } from './captcha.js';
 import {
-  resolveJobCredentials,
+  resolveJobSecrets,
   resolveMistralApiKey,
   type AppConfig,
   type JobConfig,
@@ -21,46 +20,97 @@ import {
 } from './errors.js';
 import { createLogger } from './logger.js';
 import {
+  isObjectStorageConfigured,
+  uploadRunScreenshot,
+} from './object-storage.js';
+import {
   formatFailureBody,
   formatSuccessBody,
+  dispatchNotify,
   sendNtfy,
 } from './notify.js';
-import { tnpdclOverlayKeys, fingerprintFailure } from './overlay.js';
+import { decideNotify } from './compare.js';
+import {
+  allowedOverlayKeys,
+  applyWorkflowOverlay,
+  fingerprintFailure,
+  overlayProviderForJob,
+  type SelectorOverlay,
+} from './overlay.js';
 import {
   extractCompactDom,
   proposeOverlayPatch as proposeOverlayPatchWithDeps,
 } from './recovery.js';
 import type { BillingStore, RunDocument } from './store/types.js';
+import { defaultExtractStrategies } from './workflow/extract-strategies.js';
+import { runWorkflow } from './workflow/interpreter.js';
 
 export type RunnerDeps = {
   withBrowser: typeof withBrowser;
   sendNtfy: typeof sendNtfy;
+  dispatchNotify: typeof dispatchNotify;
   createMistralCaptchaSolver: typeof createMistralCaptchaSolver;
   getAdapter: (provider: string) => BillingAdapter;
+  runWorkflow: typeof runWorkflow;
   env: NodeJS.ProcessEnv;
   store?: BillingStore;
   onRunCreated?: (runId: string) => void;
+  /**
+   * Serializes Chromium with the other users in this process (Run now, cron,
+   * chat authoring). Omitted in tests and one-shot CLI runs, where nothing else
+   * can be driving the browser.
+   */
+  lock?: BrowserLock;
   proposeOverlayPatch: (
     input: Parameters<typeof proposeOverlayPatchWithDeps>[0],
   ) => Promise<Awaited<ReturnType<typeof proposeOverlayPatchWithDeps>>>;
   extractCompactDom: typeof extractCompactDom;
+  uploadScreenshot: (input: {
+    runId: string;
+    body: Buffer;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<string | undefined>;
 };
 
 const defaultDeps: RunnerDeps = {
   withBrowser,
   sendNtfy,
+  dispatchNotify,
   createMistralCaptchaSolver,
   getAdapter,
+  runWorkflow,
   env: process.env,
   proposeOverlayPatch: async () => {
     throw new ConfigError('Recovery proposer not configured');
   },
   extractCompactDom,
+  uploadScreenshot: defaultUploadScreenshot,
 };
 
+async function defaultUploadScreenshot(input: {
+  runId: string;
+  body: Buffer;
+  env: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  if (!isObjectStorageConfigured(input.env)) return undefined;
+  return uploadRunScreenshot(input);
+}
+
+/** An adapter returns a `BillResult`; the interpreter returns the extracted record. */
+export type JobRunOutput = BillResult | Record<string, unknown>;
+
 export type RunJobResult =
-  | { ok: true; result: BillResult }
+  | { ok: true; result: JobRunOutput }
   | { ok: false; error: AppError };
+
+type JobExecution = {
+  /** Returned to the caller unchanged, so adapter callers still see a `BillResult`. */
+  result: JobRunOutput;
+  /** The generic projection stored on the run and fed to notify/compare. */
+  record: Record<string, unknown>;
+  /** Adapters may opt out of the success notification; workflows never do. */
+  adapterNotify?: boolean;
+};
 
 /**
  * Wraps captcha solver creation so the Mistral API key is only resolved (and
@@ -153,36 +203,133 @@ function isRecoverableError(error: AppError): boolean {
   );
 }
 
-function runSummary(result: BillResult): RunDocument['billSummary'] {
-  return {
+/** Maps an adapter's `BillResult` onto the generic `RunDocument.result` shape. Never includes `provider` or `notify`. */
+export function billResultToRecord(result: BillResult): Record<string, unknown> {
+  const record: Record<string, unknown> = {
     amount: result.amount,
     accountLabel: result.accountLabel,
-    ...(result.dueDate ? { dueDate: result.dueDate } : {}),
-    ...(result.billPeriod ? { billPeriod: result.billPeriod } : {}),
-    ...(result.status ? { status: result.status } : {}),
   };
+  if (result.dueDate) record.dueDate = result.dueDate;
+  if (result.billPeriod) record.billPeriod = result.billPeriod;
+  if (result.status) record.status = result.status;
+  if (result.rawNotes) record.rawNotes = result.rawNotes;
+  return record;
+}
+
+function jobAdapterId(job: JobConfig): string {
+  const legacyProvider = (job as JobConfig & { provider?: string }).provider;
+  const adapterId = job.adapterId ?? legacyProvider;
+  if (!adapterId) {
+    throw new ConfigError(`Job ${job.id} is missing adapterId`);
+  }
+  return adapterId;
+}
+
+function projectLastResult(
+  result: Record<string, unknown>,
+  schema: JobConfig['schema'],
+): Record<string, string | number> {
+  const projected: Record<string, string | number> = {};
+  for (const field of schema) {
+    const value = result[field.key];
+    if (typeof value === 'string' || typeof value === 'number') {
+      projected[field.key] = value;
+    }
+  }
+  return projected;
+}
+
+async function sendJobNotification(input: {
+  app: AppConfig;
+  job: JobConfig;
+  runId: string;
+  status: 'success' | 'failed';
+  result: Record<string, unknown> | null;
+  adapterNotify?: boolean;
+  error?: AppError;
+  screenshotPath?: string;
+  dispatchNotifyImpl?: typeof dispatchNotify;
+}): Promise<void> {
+  const decision = decideNotify({
+    on: input.job.notify.on,
+    status: input.status,
+    result: input.result,
+    lastResult: input.job.lastResult,
+    schema: input.job.schema,
+    adapterNotify: input.adapterNotify,
+  });
+
+  if (input.status === 'success' && decision !== 'send_success') {
+    return;
+  }
+  if (input.status === 'failed' && decision !== 'send_failure') {
+    return;
+  }
+
+  const title =
+    input.status === 'failed'
+      ? `${input.job.notify.title} failed`
+      : input.job.notify.title;
+  const body =
+    input.status === 'failed' && input.error
+      ? formatFailureBody(input.job.id, input.error, input.screenshotPath)
+      : formatSuccessBody(input.result ?? {}, input.job.schema);
+
+  const channel =
+    input.job.notify.channel.type === 'ntfy' && !input.job.notify.channel.topic
+      ? { ...input.job.notify.channel, topic: input.app.ntfy.topic }
+      : input.job.notify.channel;
+
+  await (input.dispatchNotifyImpl ?? dispatchNotify)({
+    channel,
+    defaultNtfy: {
+      baseUrl: input.app.ntfy.baseUrl,
+      priority: input.app.ntfy.priority,
+    },
+    title,
+    body,
+    priority: input.status === 'failed' ? 'high' : input.app.ntfy.priority,
+    webhookPayload: {
+      jobId: input.job.id,
+      runId: input.runId,
+      status: input.status,
+      result: input.status === 'success' ? input.result : null,
+      error:
+        input.status === 'failed' && input.error
+          ? { code: input.error.code, message: input.error.message }
+          : null,
+    },
+  });
 }
 
 async function captureScreenshot(
   app: AppConfig,
-  job: JobConfig,
   logger: ReturnType<typeof createLogger>,
   page: {
-    screenshot: (options: { path: string }) => Promise<Buffer | Uint8Array | void>;
+    screenshot: (options?: { type?: 'png' }) => Promise<Buffer | Uint8Array | void>;
+  },
+  input: {
+    runId: string;
+    env: NodeJS.ProcessEnv;
+    uploadScreenshot: RunnerDeps['uploadScreenshot'];
   },
 ): Promise<{ path?: string; base64?: string }> {
   if (!app.browser.saveErrorScreenshot) return {};
-  const safeJobId = job.id.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const candidatePath = path.join('tmp', `${safeJobId}-${Date.now()}.png`);
   try {
-    await mkdir(path.dirname(candidatePath), { recursive: true });
-    const png = await page.screenshot({ path: candidatePath });
-    const base64 = Buffer.isBuffer(png)
-      ? png.toString('base64')
-      : png instanceof Uint8Array
-        ? Buffer.from(png).toString('base64')
+    const raw = await page.screenshot({ type: 'png' });
+    const body = Buffer.isBuffer(raw)
+      ? raw
+      : raw instanceof Uint8Array
+        ? Buffer.from(raw)
         : undefined;
-    return { path: candidatePath, base64 };
+    const base64 = body?.toString('base64');
+    if (!body) return { base64 };
+    const path = await input.uploadScreenshot({
+      runId: input.runId,
+      body,
+      env: input.env,
+    });
+    return { path, base64 };
   } catch (screenshotError) {
     logger.warn('error screenshot failed', {
       error: String(screenshotError),
@@ -191,28 +338,62 @@ async function captureScreenshot(
   }
 }
 
+/**
+ * Runs one job, holding the browser lock (when one is configured) for the whole
+ * run. A busy lock is refused rather than queued: the caller is either the API
+ * (which answers 409) or the scheduler (which skips the tick), so a refused run
+ * writes no run document at all.
+ */
 export async function runJob(
   app: AppConfig,
   job: JobConfig,
   deps: Partial<RunnerDeps> = {},
 ): Promise<RunJobResult> {
   const runnerDeps = { ...defaultDeps, ...deps };
+  const runId = randomUUID();
+  const lock = runnerDeps.lock;
+
+  if (lock && !lock.tryAcquire({ kind: 'run', id: runId })) {
+    const holder = lock.current();
+    createLogger(job.id).warn('job skipped because the browser is busy', {
+      heldBy: holder?.kind ?? 'unknown',
+    });
+    return { ok: false, error: new ScrapeError('Browser busy') };
+  }
+
+  try {
+    return await executeJob(app, job, runnerDeps, deps, runId);
+  } finally {
+    lock?.release(runId);
+  }
+}
+
+async function executeJob(
+  app: AppConfig,
+  job: JobConfig,
+  runnerDeps: RunnerDeps,
+  deps: Partial<RunnerDeps>,
+  runId: string,
+): Promise<RunJobResult> {
   const logger = createLogger(job.id);
   let screenshotPath: string | undefined;
   let screenshotBase64: string | undefined;
   const startedAt = Date.now();
-  const runId = randomUUID();
   let recoveryAttempted = false;
   let recoverySucceeded = false;
   let overlayActivated = false;
   logger.info('job start');
+
+  // A workflow job replays its own steps, so it has no adapter to name.
+  const adapterId = job.engine === 'workflow' ? undefined : jobAdapterId(job);
 
   if (runnerDeps.store) {
     await runnerDeps.store.createRun({
       id: runId,
       jobId: job.id,
       userId: job.userId,
-      provider: job.provider,
+      engine: job.engine,
+      ...(adapterId === undefined ? {} : { adapterId }),
       status: 'running',
       startedAt: new Date(startedAt).toISOString(),
       finishedAt: null,
@@ -223,24 +404,117 @@ export async function runJob(
       recoveryAttempted: false,
       recoverySucceeded: false,
       overlayActivated: false,
-      billSummary: null,
+      result: null,
     });
   }
   runnerDeps.onRunCreated?.(runId);
 
   try {
-    const credentials = resolveJobCredentials(job, runnerDeps.env);
+    const secrets = runnerDeps.store
+      ? await resolveJobSecrets(job, runnerDeps.store, runnerDeps.env)
+      : {};
     const proposePatch =
       deps.proposeOverlayPatch ?? createRecoveryPatchProposer(app, runnerDeps);
 
-    const result = await runnerDeps.withBrowser(app.browser, async (page) => {
-      const adapter = runnerDeps.getAdapter(job.provider);
+    const execution = await runnerDeps.withBrowser(app.browser, async (page) => {
       const captchaSolver = createLazyCaptchaSolver(runnerDeps, app.mistral);
+
+      if (job.engine === 'workflow') {
+        const provider = overlayProviderForJob(job);
+        const allowedKeys = [...allowedOverlayKeys(job)];
+        const activeOverlay = runnerDeps.store
+          ? (
+              await runnerDeps.store.listActiveOverlays({
+                provider,
+                jobId: job.id,
+              })
+            )[0]?.patch
+          : undefined;
+
+        const runWorkflowOnce = async (recoveryPatch?: SelectorOverlay) => {
+          const overlay = recoveryPatch
+            ? { ...(activeOverlay ?? {}), ...recoveryPatch }
+            : activeOverlay;
+          const steps = applyWorkflowOverlay(job.workflow, overlay);
+          return runnerDeps.runWorkflow({
+            page,
+            steps,
+            secrets,
+            captchaSolver,
+            timeoutMs: app.browser.timeoutMs,
+            schema: job.schema,
+            logger,
+            extractStrategies: defaultExtractStrategies,
+          });
+        };
+
+        try {
+          const record = await runWorkflowOnce();
+          return { result: record, record };
+        } catch (cause) {
+          const screenshot = await captureScreenshot(app, logger, page, {
+            runId,
+            env: runnerDeps.env,
+            uploadScreenshot: runnerDeps.uploadScreenshot,
+          });
+          screenshotPath = screenshot.path;
+          screenshotBase64 = screenshot.base64;
+          const error = toAppError(cause);
+          if (!runnerDeps.store || !isRecoverableError(error)) {
+            throw error;
+          }
+
+          recoveryAttempted = true;
+          let urlPath: string | undefined;
+          try {
+            urlPath = new URL(page.url()).pathname;
+          } catch {
+            urlPath = undefined;
+          }
+
+          let title: string | undefined;
+          try {
+            title = await page.title();
+          } catch {
+            title = undefined;
+          }
+
+          const fingerprint = fingerprintFailure({
+            code: error.code,
+            urlPath,
+            title,
+          });
+
+          const compactDom = await runnerDeps.extractCompactDom(page);
+          const patch = await proposePatch({
+            errorMessage: error.message,
+            screenshotBase64,
+            compactDom,
+            allowedKeys,
+          });
+
+          const record = await runWorkflowOnce(patch);
+          const overlay = await runnerDeps.store.recordOverlaySuccess({
+            provider,
+            jobId: job.id,
+            fingerprint,
+            patch,
+          });
+          recoverySucceeded = true;
+          overlayActivated =
+            overlay.status === 'active' && overlay.successCount >= 3;
+          return { result: record, record };
+        }
+      }
+
+      // Always set on this path: an adapter job without one already threw.
+      const provider = adapterId ?? jobAdapterId(job);
+      const adapter = runnerDeps.getAdapter(provider);
 
       const activeOverlay = runnerDeps.store
         ? (
             await runnerDeps.store.listActiveOverlays({
-              provider: job.provider,
+              provider,
               jobId: job.id,
             })
           )[0]?.patch
@@ -249,17 +523,27 @@ export async function runJob(
       const runAdapter = (overlay = activeOverlay) =>
         adapter.run({
           page,
-          credentials,
+          credentials: secrets,
           captchaSolver,
           timeoutMs: app.browser.timeoutMs,
           logger,
           overlay,
         });
 
+      const toExecution = (result: BillResult): JobExecution => ({
+        result,
+        record: billResultToRecord(result),
+        adapterNotify: result.notify,
+      });
+
       try {
-        return await runAdapter();
+        return toExecution(await runAdapter());
       } catch (cause) {
-        const screenshot = await captureScreenshot(app, job, logger, page);
+        const screenshot = await captureScreenshot(app, logger, page, {
+          runId,
+          env: runnerDeps.env,
+          uploadScreenshot: runnerDeps.uploadScreenshot,
+        });
         screenshotPath = screenshot.path;
         screenshotBase64 = screenshot.base64;
         const error = toAppError(cause);
@@ -296,35 +580,61 @@ export async function runJob(
           errorMessage: error.message,
           screenshotBase64,
           compactDom,
-          allowedKeys: tnpdclOverlayKeys,
+          allowedKeys: [...allowedOverlayKeys(job)],
         });
 
         const retryResult = await runAdapter(patch);
         const overlay = await runnerDeps.store.recordOverlaySuccess({
-          provider: job.provider,
+          provider,
           jobId: job.id,
           fingerprint,
           patch,
         });
         recoverySucceeded = true;
         overlayActivated = overlay.status === 'active' && overlay.successCount >= 3;
-        return retryResult;
+        return toExecution(retryResult);
       }
     });
 
-    if (result.notify !== false) {
-      await runnerDeps.sendNtfy({
-        baseUrl: app.ntfy.baseUrl,
-        topic: app.ntfy.topic,
-        title: job.notify.title,
-        body: formatSuccessBody(result),
-        priority: app.ntfy.priority,
+    const { result, record } = execution;
+
+    if (execution.adapterNotify !== false) {
+      const shouldNotifySuccess =
+        decideNotify({
+          on: job.notify.on,
+          status: 'success',
+          result: record,
+          lastResult: job.lastResult,
+          schema: job.schema,
+        }) === 'send_success';
+
+      if (shouldNotifySuccess) {
+        await sendJobNotification({
+          app,
+          job,
+          runId,
+          status: 'success',
+          result: record,
+          dispatchNotifyImpl: runnerDeps.dispatchNotify,
+        });
+      } else {
+        logger.info('notify skipped', { reason: job.notify.on });
+      }
+    } else {
+      logger.info('notify skipped', { reason: 'adapter notify false' });
+    }
+
+    if (runnerDeps.store) {
+      await runnerDeps.store.upsertJob({
+        ...job,
+        lastResult: projectLastResult(record, job.schema),
+        updatedAt: new Date().toISOString(),
       });
     }
 
     logger.info('job success', {
       durationMs: Date.now() - startedAt,
-      ...(result.notify === false ? { notifySkipped: true } : {}),
+      ...(execution.adapterNotify === false ? { notifySkipped: true } : {}),
     });
 
     if (runnerDeps.store) {
@@ -338,7 +648,7 @@ export async function runJob(
         recoveryAttempted,
         recoverySucceeded,
         overlayActivated,
-        billSummary: runSummary(result),
+        result: record,
       });
     }
 
@@ -353,12 +663,15 @@ export async function runJob(
     });
 
     try {
-      await runnerDeps.sendNtfy({
-        baseUrl: app.ntfy.baseUrl,
-        topic: app.ntfy.topic,
-        title: `Billing agent failed: ${job.id}`,
-        body: formatFailureBody(job.id, error, screenshotPath),
-        priority: 'high',
+      await sendJobNotification({
+        app,
+        job,
+        runId,
+        status: 'failed',
+        result: null,
+        error,
+        screenshotPath,
+        dispatchNotifyImpl: runnerDeps.dispatchNotify,
       });
     } catch (notifyError) {
       logger.error('failure notification failed', {
@@ -377,7 +690,7 @@ export async function runJob(
         recoveryAttempted,
         recoverySucceeded,
         overlayActivated,
-        billSummary: null,
+        result: null,
       });
     }
 

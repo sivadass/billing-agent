@@ -1,0 +1,7 @@
+.wrapper :global(.cp-media-object__title),
+.wrapper :global([class*='media-object'] [class*='title']) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

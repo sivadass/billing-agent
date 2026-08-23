@@ -134,10 +134,10 @@ Add to `BillingStore`: `upsertSecret`, `listSecrets({ userId, jobId?, conversati
 
 Settings: `ntfy.topicEnv` optional; add optional `ntfy.defaultTopic`; remove required `watchesGeneration` (read as `?? 0` during dual-run if watch code still exists).
 
-- [ ] **Step 1:** Write `packages/core/tests/job-document.test.ts` asserting a fixture new-shape job is accepted by a `assertJobDocument(raw: unknown): JobDocument` helper (add the helper in `packages/core/src/store/assert-job.ts`).
-- [ ] **Step 2:** Run `npm run test -w @billing-agent/core -- tests/job-document.test.ts` — expect FAIL (helper missing).
-- [ ] **Step 3:** Implement `assertJobDocument` + update `JobDocument` / `RunDocument` / `SettingsDocument` / `BillingStore`.
-- [ ] **Step 4:** Update `mongo.ts` to read/write new fields. When reading a **legacy** job (`provider` present, no `engine`), map in the driver:
+- [x] **Step 1:** Write `packages/core/tests/job-document.test.ts` asserting a fixture new-shape job is accepted by a `assertJobDocument(raw: unknown): JobDocument` helper (add the helper in `packages/core/src/store/assert-job.ts`).
+- [x] **Step 2:** Run `npm run test -w @billing-agent/core -- tests/job-document.test.ts` — expect FAIL (helper missing).
+- [x] **Step 3:** Implement `assertJobDocument` + update `JobDocument` / `RunDocument` / `SettingsDocument` / `BillingStore`.
+- [x] **Step 4:** Update `mongo.ts` to read/write new fields. When reading a **legacy** job (`provider` present, no `engine`), map in the driver:
 
 ```ts
 function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
@@ -170,8 +170,8 @@ function coerceLegacyJob(raw: Record<string, unknown>): JobDocument {
 
 Legacy runs: `billSummary` → `result`, `provider` → `adapterId`, `engine: 'adapter'`.
 
-- [ ] **Step 5:** Fix compile errors in job-runner/config/api by mapping `job.adapterId ?? job.provider` temporarily **only inside this task if needed**; prefer finishing Task 2–3 in the same slice so `provider` is gone from call sites.
-- [ ] **Step 6:** `npm run test -w @billing-agent/core` — existing tests updated to new job fixtures (`packages/core/tests/fixtures/jobs.valid.json`).
+- [x] **Step 5:** Fix compile errors in job-runner/config/api by mapping `job.adapterId ?? job.provider` temporarily **only inside this task if needed**; prefer finishing Task 2–3 in the same slice so `provider` is gone from call sites.
+- [x] **Step 6:** `npm run test -w @billing-agent/core` — existing tests updated to new job fixtures (`packages/core/tests/fixtures/jobs.valid.json`).
 
 **Done when:** core compiles; dummy fixture job uses `engine: 'adapter'`, `adapterId: 'dummy'`.
 
@@ -201,10 +201,10 @@ export function decryptSecret(
 - Key: 32 bytes from `SECRETS_MASTER_KEY` (accept 64-char hex or 44-char base64). Else `ConfigError('Missing or invalid environment variable: SECRETS_MASTER_KEY')`.
 - `createCipheriv('aes-256-gcm', key, iv)` with 12-byte random IV.
 
-- [ ] **Step 1:** Test round-trip and “wrong key throws”.
-- [ ] **Step 2:** Run test — FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Tests pass. Never log plaintext.
+- [x] **Step 1:** Test round-trip and “wrong key throws”.
+- [x] **Step 2:** Run test — FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Tests pass. Never log plaintext.
 
 ### Task 3: Job runner uses adapterId + decrypted secrets + generic result
 
@@ -244,8 +244,8 @@ export function billResultToRecord(result: BillResult): Record<string, unknown> 
 
 Notify: resolve topic from `job.notify.channel` (ntfy) or skip webhook until slice 2 (if channel is webhook, **skip send** and log `notify skipped: webhook not implemented` only if you split — **prefer implementing webhook in slice 2 Task 6, not here**). Slice 1: if channel is ntfy with empty topic, fall back to `settings.ntfy.defaultTopic` or env `NTFY_TOPIC`.
 
-- [ ] Update job-runner tests: dummy success writes `result.amount`; no `billSummary`.
-- [ ] `npm run test -w @billing-agent/core`
+- [x] Update job-runner tests: dummy success writes `result.amount`; no `billSummary`.
+- [x] `npm run test -w @billing-agent/core`
 
 ### Task 4: Migrate CLI
 
@@ -269,8 +269,8 @@ Behavior (idempotent): skip jobs that already have `engine`. For legacy jobs, ap
 
 TNPDCL `startUrl`: `https://www.tnebnet.org/awp/login`. Dummy `startUrl`: `file://` fixture or existing dummy URL used by the adapter.
 
-- [ ] Unit test with in-memory fake store (do not require Mongo): one legacy tnpdcl job + one watch + one price_check → new documents.
-- [ ] Wire CLI:
+- [x] Unit test with in-memory fake store (do not require Mongo): one legacy tnpdcl job + one watch + one price_check → new documents.
+- [x] Wire CLI:
 
 ```text
 billing-agent migrate-generic-jobs
@@ -289,10 +289,10 @@ billing-agent migrate-generic-jobs
 
 Jobs table column **Provider** → **Engine** (`adapter:tnpdcl` or `workflow`). Job form: hide `credentialsEnv`; show read-only engine; notify title + ntfy topic fields; write-only secret inputs (`PUT /jobs/:id/secrets`). Keep watches UI working against old `/watches` until slice 5.
 
-- [ ] API tests: POST job with `engine: 'adapter'` succeeds; POST with unknown engine 400.
-- [ ] API tests: `PUT /jobs/:id/secrets` encrypts; `GET` returns `{ key, set: true }` only (no ciphertext). Second PUT of the same key updates ciphertext (upsert). Empty string → 400. Other user’s job → 404.
-- [ ] Web: run detail shows key/value from `result`.
-- [ ] `npm run test -w @billing-agent/api` and `npm run test -w @billing-agent/web`
+- [x] API tests: POST job with `engine: 'adapter'` succeeds; POST with unknown engine 400.
+- [x] API tests: `PUT /jobs/:id/secrets` encrypts; `GET` returns `{ key, set: true }` only (no ciphertext). Second PUT of the same key updates ciphertext (upsert). Empty string → 400. Other user’s job → 404.
+- [x] Web: run detail shows key/value from `result`.
+- [x] `npm run test -w @billing-agent/api` and `npm run test -w @billing-agent/web`
 
 **Slice 1 exit:** dummy adapter job runs in CI; types no longer mention `credentialsEnv` / `billSummary` / `provider` on `JobDocument` / `RunDocument`.
 
@@ -309,8 +309,8 @@ Shippable when: `engine: 'workflow'` job against `https://sivadass.in/` extracts
 - Move tests to `packages/core/tests/assert-public-url.test.ts`
 - Re-export from price-monitor for one slice so watches still compile
 
-- [ ] Same assertions as today’s price-monitor tests.
-- [ ] `npm run test -w @billing-agent/core`
+- [x] Same assertions as today’s price-monitor tests.
+- [x] `npm run test -w @billing-agent/core`
 
 ### Task 7: Workflow validate + interpreter
 
@@ -346,9 +346,9 @@ Step semantics:
 - `extract` — for each field, `strategy: 'text'` → `innerText`; `price` / `json_ld` / `shopify_json` → call extract helpers (Task 8). Missing required schema key → `ScrapeError`
 - `assert` — locator count > 0 or `LoginError` / `ScrapeError`
 
-- [ ] Test (smoke, network): workflow `[goto https://sivadass.in/, extract mailto]`, `result.email` equals `contact@sivadass.in` (trim, case-insensitive).
-- [ ] Test (local): fill with secret `password` never appears in thrown error messages.
-- [ ] Interpreter does not import Mistral except via injected `captchaSolver`.
+- [x] Test (smoke, network): workflow `[goto https://sivadass.in/, extract mailto]`, `result.email` equals `contact@sivadass.in` (trim, case-insensitive).
+- [x] Test (local): fill with secret `password` never appears in thrown error messages.
+- [x] Interpreter does not import Mistral except via injected `captchaSolver`.
 
 ### Task 8: Move extract strategies into core
 
@@ -395,7 +395,7 @@ Webhook: `POST` JSON spec payload; retry once; `assertPublicUrl(channel.url)` fi
 
 Drop rule: find schema field with `type === 'price'`; numeric compare; currency key `currency` if present. Mirror price-monitor gates (`price <= 0` is a failed extract, not a drop).
 
-- [ ] Tests for all four `on` values and webhook SSRF reject `http://127.0.0.1/`.
+- [x] Tests for all four `on` values and webhook SSRF reject `http://127.0.0.1/`.
 
 ### Task 10: Browser lock + job-runner engine switch
 
@@ -421,10 +421,10 @@ export function createBrowserLock(): {
 
 `runJob` for `engine === 'workflow'` calls `runWorkflow` instead of `getAdapter`.
 
-- [ ] Test: second `tryAcquire` returns false; `release` then succeeds.
-- [ ] Dummy **adapter** job in job-runner test still writes `result.amount` (engine path).
-- [ ] Workflow job-runner test: `sivadass-in-email` extracts `contact@sivadass.in`.
-- [ ] `npm run test` (core, api, worker).
+- [x] Test: second `tryAcquire` returns false; `release` then succeeds.
+- [x] Dummy **adapter** job in job-runner test still writes `result.amount` (engine path).
+- [x] Workflow job-runner test: `sivadass-in-email` extracts `contact@sivadass.in`.
+- [x] `npm run test` (core, api, worker).
 
 **Slice 2 exit:** `jobs.example.json` includes job `sivadass-in-email` (`startUrl: https://sivadass.in/`, schema email); webhook notify unit-tested.
 
@@ -446,7 +446,7 @@ Routes from spec. `onAuthorConversation` optional → 503 if missing on POST cre
 
 GET conversation strips nothing from messages except ensuring no secret plaintext (redact helper).
 
-- [ ] Tests: confirm in `active` → 409; secrets in `active` → 409; confirm in `confirming` creates job with `engine: 'workflow'`, `secretIds` set, conversation `saved`.
+- [x] Tests: confirm in `active` → 409; secrets in `active` → 409; confirm in `confirming` creates job with `engine: 'workflow'`, `secretIds` set, conversation `saved`.
 
 ### Task 12: `packages/authoring` agent loop
 
@@ -488,9 +488,9 @@ Rules:
 - `propose_job` sets `draftWorkflow`, `draftSchema`, `draftExtract`, status `confirming`.
 - Worker restart: `expireStaleAuthoringSessions()` marks conversations `expired` if status in `active|awaiting_secret|confirming` and no live session.
 
-- [ ] Mocked test: LLM `ask_secret` → status awaiting_secret (local login fixture / mocked page).
-- [ ] Mocked test: `propose_job` for sivadass.in email → confirming with `draftExtract.email`.
-- [ ] No real Mistral in CI.
+- [x] Mocked test: LLM `ask_secret` → status awaiting_secret (local login fixture / mocked page).
+- [x] Mocked test: `propose_job` for sivadass.in email → confirming with `draftExtract.email`.
+- [x] No real Mistral in CI.
 
 ### Task 13: Wire worker + web Chat hub
 
@@ -508,7 +508,7 @@ UI:
 - `awaiting_secret`: password inputs
 - `confirming`: sample table + Confirm / Keep going
 
-- [ ] `npm run test -w @billing-agent/web`
+- [x] `npm run test -w @billing-agent/web`
 - [ ] Manual: chat `https://sivadass.in/` → confirm email `contact@sivadass.in` (document in `docs/local-testing-sign-off-guide.md`)
 
 **Slice 3 exit:** confirming chat creates a job; Run now uses interpreter only.
@@ -530,8 +530,8 @@ Key format: `step:<stepId>.selector`, `step:<stepId>.imageSelector`, `field:<key
 
 Interpreter applies overlay: if patch has `step:abc.selector`, replace that step’s selector before run.
 
-- [ ] Test: failed extract → mocked proposer returns `{ 'field:amount': '#new' }` → retry succeeds → `recordOverlaySuccess`.
-- [ ] Captcha errors still not recovered.
+- [x] Test: failed extract → mocked proposer returns `{ 'field:amount': '#new' }` → retry succeeds → `recordOverlaySuccess`.
+- [x] Captcha errors still not recovered.
 
 ---
 
@@ -551,8 +551,8 @@ Shippable when: no `/watches` routes or Price watches nav; `packages/price-monit
 - Modify: `README.md`, `watches.example.json` (delete or replace with workflow job example)
 - Extend migrate to `drop` leftover collections after copy (guard: only if no watch remains unmigrated)
 
-- [ ] `npm run test` and `npm run build` green.
-- [ ] Grep the repo for `price-monitor`, `WatchDocument`, `/watches` — zero production references.
+- [x] `npm run test` and `npm run build` green.
+- [x] Grep the repo for `price-monitor`, `WatchDocument`, `/watches` — zero production references.
 
 **In scope to delete:** watch package, watch UI/API/CLI/crons, `watches.example.json`, leftover watch collections after migrate.
 

@@ -8,12 +8,12 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts",
-    "test": "npm run build -w @billing-agent/core && tsx --test tests/**/*.test.ts"
+    "test": "npm run build -w @billing-agent/core && npm run build -w @billing-agent/authoring && tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
     "@billing-agent/api": "*",
+    "@billing-agent/authoring": "*",
     "@billing-agent/core": "*",
-    "@billing-agent/price-monitor": "*",
     "commander": "^13.1.0",
     "dotenv": "^16.5.0",
     "node-cron": "^3.0.3"

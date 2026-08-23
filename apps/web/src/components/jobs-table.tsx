@@ -10,6 +10,7 @@ import {
 } from 'cleanplate';
 import { useMemo, useState } from 'react';
 import { humanizeCron } from '../lib/cron-humanize';
+import { engineLabel } from '../lib/engine-label';
 import type { JobDocument } from '../lib/types';
 import styles from './jobs-table.module.scss';
 
@@ -24,7 +25,7 @@ type JobsTableProps = {
 
 type JobsTableRow = {
   id: string;
-  provider: string;
+  engine: string;
   enabled: boolean;
   enabledLabel: string;
   scheduleLabel: string;
@@ -90,7 +91,7 @@ export function JobsTable({
     () =>
       jobs.map((job) => ({
         id: job.id,
-        provider: job.provider,
+        engine: engineLabel(job),
         enabled: job.enabled,
         enabledLabel: job.enabled ? 'Enabled' : 'Disabled',
         scheduleLabel: humanizeCron(job.schedule),
@@ -140,7 +141,7 @@ export function JobsTable({
       <Table
         columns={[
           { id: 'id', title: 'ID' },
-          { id: 'provider', title: 'Provider' },
+          { id: 'engine', title: 'Engine' },
           {
             id: 'enabled',
             title: 'Enabled',
@@ -165,9 +166,10 @@ export function JobsTable({
         data={rows}
         mobileColumns={{
           title: 'id',
+          mediaAvatar: 'id',
           subtitle: (raw) => {
             const row = raw as JobsTableRow;
-            return `${row.provider} · ${row.scheduleLabel}`;
+            return `${row.engine} · ${row.scheduleLabel}`;
           },
           meta: (raw) => {
             const row = raw as JobsTableRow;

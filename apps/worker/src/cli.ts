@@ -5,18 +5,23 @@ import {
   AppError,
   ConfigError,
   connectStore,
+  connectStoreForMigration,
+  createBrowserLock,
   hashPassword,
   loadConfigFromStore,
   loadSeedConfig,
+  migrateGenericJobs,
   registerBuiltInAdapters,
   runJob,
   runJobs,
-  sendNtfy,
-  withBrowser,
 } from '@billing-agent/core';
-import { runWatch, runWatches } from '@billing-agent/price-monitor';
+import {
+  expireStaleAuthoringSessions,
+  handleAuthoringTurn,
+} from '@billing-agent/authoring';
 import { parseCorsOrigins, startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
+import { executeRunJobsCommand } from './run-jobs-command.js';
 
 registerBuiltInAdapters();
 
@@ -70,14 +75,6 @@ function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): number {
   return port;
 }
 
-function browserLoadHtmlFactory(app: Awaited<ReturnType<typeof loadConfigFromStore>>) {
-  return async (url: string): Promise<string> =>
-    withBrowser(app.browser, async (page) => {
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
-      return page.content();
-    });
-}
-
 program
   .command('run')
   .option('--job <id>', 'run a single job id')
@@ -90,85 +87,43 @@ program
         return;
       }
 
-      const store = await connectStore(requireMongoUri());
-      try {
-        const app = await loadConfigFromStore(store);
-        const jobIds = options.all ? 'all' : [options.job as string];
-        const { failed } = await runJobs(app, jobIds);
-        process.exitCode = failed > 0 ? 1 : 0;
-      } finally {
-        await store.close();
-      }
+      const jobIds = options.all ? 'all' : [options.job as string];
+      const { failed } = await executeRunJobsCommand(
+        requireMongoUri(),
+        jobIds,
+        { connectStore, loadConfigFromStore, runJobs },
+      );
+      process.exitCode = failed > 0 ? 1 : 0;
     }),
   );
-
-program
-  .command('run-watch')
-  .requiredOption('--id <id>', 'run a single watch id')
-  .action(
-    withErrorHandling(async (options: { id: string }) => {
-      const store = await connectStore(requireMongoUri());
-      try {
-        const app = await loadConfigFromStore(store);
-        const watch = await store.getWatch(options.id);
-        if (!watch) {
-          throw new ConfigError(`Unknown watch id: ${options.id}`);
-        }
-        const check = await runWatch({
-          watch,
-          store,
-          sendNtfy,
-          ntfy: {
-            baseUrl: app.ntfy.baseUrl,
-            topic: app.ntfy.topic,
-            priority: app.ntfy.priority,
-          },
-          browserLoadHtml: browserLoadHtmlFactory(app),
-          mistralApiKey: process.env[app.mistral.apiKeyEnv],
-          mistralModel: app.mistral.model,
-        });
-        process.exitCode = check.status === 'failed' ? 1 : 0;
-      } finally {
-        await store.close();
-      }
-    }),
-  );
-
-program
-  .command('run-watches')
-  .action(withErrorHandling(async () => {
-    const store = await connectStore(requireMongoUri());
-    try {
-      const app = await loadConfigFromStore(store);
-      const checks = await runWatches({
-        watches: await store.listWatches(),
-        store,
-        sendNtfy,
-        ntfy: {
-          baseUrl: app.ntfy.baseUrl,
-          topic: app.ntfy.topic,
-          priority: app.ntfy.priority,
-        },
-        browserLoadHtml: browserLoadHtmlFactory(app),
-        mistralApiKey: process.env[app.mistral.apiKeyEnv],
-        mistralModel: app.mistral.model,
-      });
-      process.exitCode = checks.some((check) => check.status === 'failed') ? 1 : 0;
-    } finally {
-      await store.close();
-    }
-  }));
 
 program
   .command('daemon')
   .action(withErrorHandling(async () => {
     const store = await connectStore(requireMongoUri());
     const app = await loadConfigFromStore(store);
+    // One Chromium for the whole daemon: the API reads it to answer 409, the
+    // scheduler skips ticks while it is held, the runner acquires it per run,
+    // and slice 3's chat authoring will acquire it per conversation.
+    const lock = createBrowserLock();
+    await expireStaleAuthoringSessions(store);
     const server = await startServer({
       port: resolveHttpPort(),
       jwtSecret: requireJwtSecret(),
       store,
       corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
+      lock,
+      onAuthorConversation: async (conversationId: string) => {
+        const latest = await loadConfigFromStore(store);
+        await handleAuthoringTurn({
+          store,
+          conversationId,
+          lock,
+          env: process.env,
+          mistral: latest.mistral,
+          browser: latest.browser,
+        });
+      },
       onRunJob: async (jobId: string) => {
         const latest = await loadConfigFromStore(store);
         const job = latest.jobs.find((item) => item.id === jobId);
@@ -180,63 +135,35 @@ program
           let reported = false;
           void runJob(latest, job, {
             store,
+            lock,
             onRunCreated: (runId) => {
               reported = true;
               resolve(runId);
             },
-          }).catch((error: unknown) => {
-            if (!reported) {
-              reject(error instanceof Error ? error : new Error(String(error)));
-              return;
-            }
-            console.error(
-              `[daemon] run for ${jobId} failed after start:`,
-              error instanceof Error ? error.message : error,
-            );
-          });
-        });
-      },
-      onRunWatch: async (watchId: string) => {
-        const latest = await loadConfigFromStore(store);
-        const watch = await store.getWatch(watchId);
-        if (!watch) {
-          throw new ConfigError(`Unknown watch id: ${watchId}`);
-        }
-
-        return await new Promise<string>((resolve, reject) => {
-          let reported = false;
-          void runWatch({
-            watch,
-            store,
-            sendNtfy,
-            ntfy: {
-              baseUrl: latest.ntfy.baseUrl,
-              topic: latest.ntfy.topic,
-              priority: latest.ntfy.priority,
-            },
-            browserLoadHtml: browserLoadHtmlFactory(latest),
-            mistralApiKey: process.env[latest.mistral.apiKeyEnv],
-            mistralModel: latest.mistral.model,
-            onCheckCreated: (checkId) => {
-              reported = true;
-              resolve(checkId);
-            },
-          }).catch((error: unknown) => {
-            if (!reported) {
-              reject(error instanceof Error ? error : new Error(String(error)));
-              return;
-            }
-            console.error(
-              `[daemon] watch run for ${watchId} failed after start:`,
-              error instanceof Error ? error.message : error,
-            );
-          });
+          })
+            .then((outcome) => {
+              // A run refused by the lock never reaches `onRunCreated`; the
+              // API turns this rejection into a 409 instead of hanging.
+              if (!reported && !outcome.ok) {
+                reject(new Error(outcome.error.message));
+              }
+            })
+            .catch((error: unknown) => {
+              if (!reported) {
+                reject(error instanceof Error ? error : new Error(String(error)));
+                return;
+              }
+              console.error(
+                `[daemon] run for ${jobId} failed after start:`,
+                error instanceof Error ? error.message : error,
+              );
+            });
         });
       },
     });
 
     try {
-      await startDaemon(app, { store });
+      await startDaemon(app, { store, lock });
     } finally {
       await server.close();
       await store.close();
@@ -300,6 +227,27 @@ program
         );
       } finally {
         await store.close();
+      }
+    }),
+  );
+
+program
+  .command('migrate-generic-jobs')
+  .description(
+    'Idempotent: migrate legacy billing jobs/watches/price_checks into the unified job/run model',
+  )
+  .action(
+    withErrorHandling(async () => {
+      const { store, legacy, close } = await connectStoreForMigration(requireMongoUri());
+      try {
+        const result = await migrateGenericJobs({ store, env: process.env, legacy });
+        console.log(
+          `Migrated ${result.jobsMigrated} job(s), ${result.watchesMigrated} watch(es), ${result.runsMigrated} run(s)${
+            result.legacyCollectionsDropped ? '; dropped legacy watch collections' : ''
+          }`,
+        );
+      } finally {
+        await close();
       }
     }),
   );
