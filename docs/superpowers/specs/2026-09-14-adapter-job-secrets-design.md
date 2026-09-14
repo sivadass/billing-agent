@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-14  
 **Status:** Approved for implementation planning  
-**Related:** `2026-08-08-billing-agent-design.md`, `2026-08-09-jobs-runs-ui-design.md`, `2026-08-16-generic-site-jobs-design.md`
+**Related:** `2026-08-08-billing-agent-design.md`, `2026-08-09-jobs-runs-ui-design.md`, `2026-08-16-generic-site-jobs-design.md`  
+**Plan:** `docs/superpowers/plans/2026-09-14-adapter-job-secrets.md`
 
 ## Problem
 
