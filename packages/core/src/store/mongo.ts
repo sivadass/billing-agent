@@ -5,6 +5,8 @@ import { ensureStoreIndexes } from './indexes.js';
 import type {
   BillingStore,
   ConversationDocument,
+  ConversationMessage,
+  ConversationPatch,
   JobDocument,
   OverlayDocument,
   OverlaySuccessInput,
@@ -23,6 +25,7 @@ type Update<T> = {
   $set?: Partial<T>;
   $setOnInsert?: Partial<T>;
   $inc?: Record<string, number>;
+  $push?: { messages?: ConversationMessage };
 };
 
 type CollectionLike<T extends Record<string, unknown>> = {
@@ -259,6 +262,28 @@ export function createBillingStoreFromCollections(
       );
     },
 
+    async appendConversationMessage(id, message) {
+      const updatedAt = nowIso();
+      const existing = await collections.conversations.findOne({ id });
+      if (!existing) return null;
+      await collections.conversations.updateOne(
+        { id },
+        { $push: { messages: message }, $set: { updatedAt } },
+      );
+      return collections.conversations.findOne({ id });
+    },
+
+    async patchConversation(id, fields: ConversationPatch) {
+      const existing = await collections.conversations.findOne({ id });
+      if (!existing) return null;
+      const updatedAt = nowIso();
+      await collections.conversations.updateOne(
+        { id },
+        { $set: { ...fields, updatedAt } },
+      );
+      return collections.conversations.findOne({ id });
+    },
+
     async getConversation(id) {
       return collections.conversations.findOne({ id });
     },
@@ -399,6 +424,16 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   await client.connect();
   const { store } = await buildStoreFromClient(client);
   return store;
+}
+
+export async function connectStoreWithClient(uri: string): Promise<{
+  store: BillingStore;
+  client: MongoClient;
+}> {
+  const client = new MongoClient(uri);
+  await client.connect();
+  const { store } = await buildStoreFromClient(client);
+  return { store, client };
 }
 
 export async function connectStoreForMigration(uri: string): Promise<{

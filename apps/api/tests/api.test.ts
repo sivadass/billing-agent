@@ -97,6 +97,39 @@ class MemoryStore implements BillingStore {
     this.conversations.set(conversation.id, conversation);
   }
 
+  async appendConversationMessage(
+    id: string,
+    message: ConversationDocument['messages'][number],
+  ): Promise<ConversationDocument | null> {
+    const existing = this.conversations.get(id);
+    if (!existing) return null;
+    const updatedAt = new Date().toISOString();
+    const updated: ConversationDocument = {
+      ...existing,
+      messages: [...existing.messages, message],
+      updatedAt,
+    };
+    this.conversations.set(id, updated);
+    return updated;
+  }
+
+  async patchConversation(
+    id: string,
+    fields: Partial<
+      Pick<
+        ConversationDocument,
+        'status' | 'draftWorkflow' | 'draftSchema' | 'draftExtract' | 'jobId'
+      >
+    >,
+  ): Promise<ConversationDocument | null> {
+    const existing = this.conversations.get(id);
+    if (!existing) return null;
+    const updatedAt = new Date().toISOString();
+    const updated: ConversationDocument = { ...existing, ...fields, updatedAt };
+    this.conversations.set(id, updated);
+    return updated;
+  }
+
   async getConversation(id: string): Promise<ConversationDocument | null> {
     return this.conversations.get(id) ?? null;
   }
