@@ -8,6 +8,14 @@ export {
   type MistralCompletionResult,
   type MistralToolCall,
 } from './agent.js';
+export {
+  CONVERSATION_TOOLS,
+  createConversationEventBus,
+  type ConversationStreamEvent,
+  type ConversationToolName,
+} from './events.js';
+export { createAuthoringRunMap } from './runs.js';
+export { trimLlmMessages, type LlmMessage } from './trim.js';
 export { type AuthoringSession } from './session.js';
 export {
   authoringTools,
