@@ -6,10 +6,8 @@ describe('createMongoCheckpointPort', () => {
   it('has() is true only when getTuple returns a value', async () => {
     const tuples = new Map<string, object>([['conv-1', { id: 'ckpt' }]]);
     const port = createMongoCheckpointPort({
-      saver: {
-        async getTuple(config) {
-          return tuples.get(config.configurable.thread_id) ?? null;
-        },
+      async getTuple(config) {
+        return tuples.get(config.configurable.thread_id) ?? null;
       },
       async deleteThread(threadId) {
         tuples.delete(threadId);

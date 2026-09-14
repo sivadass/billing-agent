@@ -1,10 +1,6 @@
-export const CONVERSATION_TOOLS = [
-  'snapshot',
-  'click',
-  'fill',
-  'wait',
-  'extract_candidates',
-] as const;
+import { PLAYWRIGHT_TOOL_NAMES } from './tools.js';
+
+export const CONVERSATION_TOOLS = PLAYWRIGHT_TOOL_NAMES;
 export type ConversationToolName = (typeof CONVERSATION_TOOLS)[number];
 
 export type ConversationStreamEvent =

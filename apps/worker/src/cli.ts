@@ -111,10 +111,7 @@ program
       client,
       checkpointCollectionName: 'langgraph_checkpoints',
     });
-    const checkpoints = createMongoCheckpointPort({
-      saver,
-      deleteThread: (threadId) => saver.deleteThread(threadId),
-    });
+    const checkpoints = createMongoCheckpointPort(saver);
     await expireStaleAuthoringSessions(store, checkpoints);
     const events = createConversationEventBus();
     const runs = createAuthoringRunMap();

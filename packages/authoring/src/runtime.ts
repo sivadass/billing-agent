@@ -11,6 +11,7 @@ import {
 import { createConversationEventBus } from './events.js';
 import { compileAuthoringGraph, invokeAuthoringGraph, type AuthoringResumeValue } from './graph.js';
 import { createAuthoringRunMap } from './runs.js';
+import { closeAuthoringSession } from './session.js';
 
 export type AuthoringCheckpointPort = {
   has(conversationId: string): Promise<boolean>;
@@ -98,7 +99,6 @@ export function createAuthoringRuntime(input: {
     },
     async cancel(conversationId) {
       runs.abort(conversationId);
-      const { closeAuthoringSession } = await import('./session.js');
       await closeAuthoringSession(conversationId);
       input.lock.release(conversationId);
       await input.checkpoints.delete(conversationId);
@@ -131,31 +131,22 @@ export async function expireStaleAuthoringSessions(
   store: BillingStore,
   checkpoints: AuthoringCheckpointPort,
 ): Promise<number> {
-  const conversations = await store.listConversations();
   let expired = 0;
 
-  for (const conversation of conversations) {
-    if (await checkpoints.has(conversation.id)) {
-      continue;
-    }
+  const inProgress = await store.listConversations({
+    status: ['active', 'awaiting_secret', 'confirming'],
+  });
+  for (const conversation of inProgress) {
+    if (await checkpoints.has(conversation.id)) continue;
+    await store.patchConversation(conversation.id, { status: 'expired' });
+    expired += 1;
+  }
 
-    if (
-      conversation.status === 'active' ||
-      conversation.status === 'awaiting_secret' ||
-      conversation.status === 'confirming'
-    ) {
-      await store.patchConversation(conversation.id, { status: 'expired' });
-      expired += 1;
-      continue;
-    }
-
-    if (
-      conversation.status === 'saved' ||
-      conversation.status === 'abandoned' ||
-      conversation.status === 'expired'
-    ) {
-      await checkpoints.delete(conversation.id);
-    }
+  const terminal = await store.listConversations({
+    status: ['saved', 'abandoned', 'expired'],
+  });
+  for (const conversation of terminal) {
+    await checkpoints.delete(conversation.id);
   }
 
   return expired;

@@ -1,6 +1,5 @@
 export {
   closeAuthoringSession,
-  expireStaleAuthoringSessions,
   getAuthoringSession,
   handleAuthoringTurn,
   listAuthoringSessionIds,
@@ -13,6 +12,7 @@ export {
   createAuthoringRuntime,
   createEphemeralAuthoringRuntime,
   createInMemoryCheckpointPort,
+  expireStaleAuthoringSessions,
   type AuthoringCheckpointPort,
   type AuthoringRuntime,
 } from './runtime.js';

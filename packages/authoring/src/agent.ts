@@ -17,8 +17,9 @@ import type {
 } from '@billing-agent/core';
 import type { AuthoringSession } from './session.js';
 import { authoringTools, type AuthoringToolName } from './tools.js';
+import type { LlmMessage } from './trim.js';
 import type { AuthoringRuntime } from './runtime.js';
-import { createEphemeralAuthoringRuntime, expireStaleAuthoringSessions } from './runtime.js';
+import { createEphemeralAuthoringRuntime } from './runtime.js';
 
 export type MistralToolCall = {
   id: string;
@@ -31,12 +32,6 @@ export type MistralCompletionResult = {
   toolCalls?: MistralToolCall[];
 };
 
-type MistralChatMessage =
-  | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: MistralToolCall[] }
-  | { role: 'tool'; content: string; toolCallId: string; name: string };
-
 export type AuthoringDeps = {
   launchSession: (input: {
     conversation: ConversationDocument;
@@ -45,7 +40,7 @@ export type AuthoringDeps = {
   completeWithTools: (input: {
     apiKey: string;
     model: string;
-    messages: MistralChatMessage[];
+    messages: LlmMessage[];
   }) => Promise<MistralCompletionResult>;
   uploadScreenshot: (input: {
     conversationId: string;
@@ -95,8 +90,6 @@ export async function defaultLaunchSession(input: {
     browser,
     context,
     page,
-    turnsThisMessage: 0,
-    turnsTotal: 0,
     lastProcessedMessageId: null,
   };
 }
@@ -104,7 +97,7 @@ export async function defaultLaunchSession(input: {
 export async function defaultCompleteWithTools(input: {
   apiKey: string;
   model: string;
-  messages: MistralChatMessage[];
+  messages: LlmMessage[];
 }): Promise<MistralCompletionResult> {
   const mistral = new Mistral({ apiKey: input.apiKey });
   const response = await mistral.chat.complete({
@@ -256,8 +249,6 @@ export async function executeTool(
       throw new Error(`Unknown tool ${toolName satisfies never}`);
   }
 }
-
-export { expireStaleAuthoringSessions };
 
 export async function handleAuthoringTurn(
   input: {

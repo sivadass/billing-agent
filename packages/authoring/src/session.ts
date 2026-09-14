@@ -4,8 +4,6 @@ export type AuthoringSession = {
   browser: Browser;
   context: BrowserContext;
   page: Page;
-  turnsThisMessage: number;
-  turnsTotal: number;
   /** Last user message id processed at the start of the current turn batch. */
   lastProcessedMessageId: string | null;
 };

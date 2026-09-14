@@ -1,5 +1,9 @@
 import type { ConversationStatus } from './types';
 
+export function isInProgressConversationStatus(status: ConversationStatus): boolean {
+  return status === 'active' || status === 'awaiting_secret' || status === 'confirming';
+}
+
 export function conversationStatusVariant(
   status: ConversationStatus,
 ): 'success' | 'warning' | 'error' | 'default' {

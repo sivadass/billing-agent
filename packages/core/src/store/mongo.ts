@@ -420,9 +420,7 @@ export function createBillingStoreFromCollections(
 }
 
 export async function connectStore(uri: string): Promise<BillingStore> {
-  const client = new MongoClient(uri);
-  await client.connect();
-  const { store } = await buildStoreFromClient(client);
+  const { store } = await connectStoreWithClient(uri);
   return store;
 }
 

@@ -1,4 +1,5 @@
 import { ApiClientError, apiFetch } from './api-client';
+import { isInProgressConversationStatus } from './conversation-status';
 
 export type ConversationToolName =
   | 'snapshot'
@@ -40,7 +41,7 @@ async function throwForNonOk(response: Response): Promise<void> {
 }
 
 export function isPollingConversationStatus(status: ConversationStatus): boolean {
-  return status === 'active' || status === 'awaiting_secret' || status === 'confirming';
+  return isInProgressConversationStatus(status);
 }
 
 export async function listConversations(): Promise<ConversationSummary[]> {

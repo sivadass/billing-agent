@@ -21,12 +21,14 @@ export function trimLlmMessages(messages: LlmMessage[]): LlmMessage[] {
   const lastUser = lastUserIndex(messages);
   const result: LlmMessage[] = [];
   let lastSnapshotIndexInTurn = -1;
+  let hasSystem = false;
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]!;
 
     if (message.role === 'system') {
-      if (result.some((entry) => entry.role === 'system')) continue;
+      if (hasSystem) continue;
+      hasSystem = true;
       result.push(message);
       continue;
     }

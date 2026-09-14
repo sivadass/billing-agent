@@ -21,9 +21,10 @@ import {
   resolveMistralApiKey,
   validateWorkflow,
 } from '@billing-agent/core';
-import type { ConversationStreamEvent, ConversationToolName } from './events.js';
+import type { ConversationStreamEvent } from './events.js';
 import {
   isAuthoringToolName,
+  isPlaywrightToolName,
   MAX_TURNS_PER_CONVERSATION,
   MAX_TURNS_PER_MESSAGE,
   type AuthoringToolName,
@@ -40,14 +41,6 @@ import type { AuthoringDeps, MistralCompletionResult, MistralToolCall } from './
 const BUSY_MESSAGE = 'Browser is busy with another session.';
 const LIMIT_MESSAGE =
   'This session used too many automated steps. Please simplify your goal or abandon and start over.';
-
-const PLAYWRIGHT_TOOLS = new Set<ConversationToolName>([
-  'snapshot',
-  'click',
-  'fill',
-  'wait',
-  'extract_candidates',
-]);
 
 export type AuthoringResumeValue =
   | { secretsSubmitted: string[] }
@@ -188,10 +181,6 @@ async function appendAssistantMessage(
   return ctx.store.appendConversationMessage(ctx.conversationId, message);
 }
 
-function publishAt(ctx: AuthoringGraphContext, event: ConversationStreamEvent): void {
-  ctx.publish(ctx.conversationId, event);
-}
-
 export function createAuthoringGraph(ctx: AuthoringGraphContext) {
   async function ensureBrowserNode(state: GraphState): Promise<Partial<GraphState>> {
     if (ctx.signal?.aborted || state.done) return { done: true };
@@ -282,7 +271,7 @@ export function createAuthoringGraph(ctx: AuthoringGraphContext) {
       state.turns_total >= MAX_TURNS_PER_CONVERSATION
     ) {
       await appendAssistantMessage(ctx, LIMIT_MESSAGE);
-      publishAt(ctx, {
+      ctx.publish(ctx.conversationId, {
         type: 'turn_end',
         conversationId: ctx.conversationId,
         at: new Date().toISOString(),
@@ -309,7 +298,7 @@ export function createAuthoringGraph(ctx: AuthoringGraphContext) {
       ? completion?.content?.trim() || 'Unable to continue.'
       : completion?.content?.trim() || 'Done.';
     await appendAssistantMessage(ctx, text);
-    publishAt(ctx, {
+    ctx.publish(ctx.conversationId, {
       type: 'turn_end',
       conversationId: ctx.conversationId,
       at: new Date().toISOString(),
@@ -336,7 +325,7 @@ export function createAuthoringGraph(ctx: AuthoringGraphContext) {
         const placeholders = keys.map((key) => secretPlaceholder(key)).join(' ');
         await appendAssistantMessage(ctx, `${preamble}${placeholders}`.trim());
         await ctx.store.patchConversation(ctx.conversationId, { status: 'awaiting_secret' });
-        publishAt(ctx, {
+        ctx.publish(ctx.conversationId, {
           type: 'interrupt',
           kind: 'secret',
           conversationId: ctx.conversationId,
@@ -364,7 +353,7 @@ export function createAuthoringGraph(ctx: AuthoringGraphContext) {
         draftSchema: schema,
         draftExtract: extract,
       });
-      publishAt(ctx, {
+      ctx.publish(ctx.conversationId, {
         type: 'interrupt',
         kind: 'confirm',
         conversationId: ctx.conversationId,
@@ -413,10 +402,10 @@ export function createAuthoringGraph(ctx: AuthoringGraphContext) {
       turnsThisMessage += 1;
       turnsTotal += 1;
 
-      if (PLAYWRIGHT_TOOLS.has(toolName as ConversationToolName)) {
-        publishAt(ctx, {
+      if (isPlaywrightToolName(toolName)) {
+        ctx.publish(ctx.conversationId, {
           type: 'tool',
-          tool: toolName as ConversationToolName,
+          tool: toolName,
           conversationId: ctx.conversationId,
           at: new Date().toISOString(),
         });
@@ -466,7 +455,7 @@ export function createAuthoringGraph(ctx: AuthoringGraphContext) {
         turnsTotal >= MAX_TURNS_PER_CONVERSATION
       ) {
         await appendAssistantMessage(ctx, LIMIT_MESSAGE);
-        publishAt(ctx, {
+        ctx.publish(ctx.conversationId, {
         type: 'turn_end',
         conversationId: ctx.conversationId,
         at: new Date().toISOString(),

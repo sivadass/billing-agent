@@ -8,12 +8,15 @@ import type {
   SettingsDocument,
 } from '@billing-agent/core';
 import {
-  expireStaleAuthoringSessions,
   handleAuthoringTurn,
   type AuthoringDeps,
   type MistralCompletionResult,
 } from '../src/agent.ts';
-import { createAuthoringRuntime, createInMemoryCheckpointPort } from '../src/runtime.ts';
+import {
+  createAuthoringRuntime,
+  createInMemoryCheckpointPort,
+  expireStaleAuthoringSessions,
+} from '../src/runtime.ts';
 import { MemorySaver } from '@langchain/langgraph';
 
 class AuthoringMemoryStore implements BillingStore {
@@ -202,8 +205,6 @@ async function runTurn(
         browser: { close: async () => {} } as never,
         context: { close: async () => {} } as never,
         page: mockPage() as never,
-        turnsThisMessage: 0,
-        turnsTotal: 0,
         lastProcessedMessageId: null,
       }),
       completeWithTools: async () => ({ content: 'done' }),
@@ -420,8 +421,6 @@ describe('authoring runtime resume', () => {
           browser: { close: async () => {} } as never,
           context: { close: async () => {} } as never,
           page: mockPage() as never,
-          turnsThisMessage: 0,
-          turnsTotal: 0,
           lastProcessedMessageId: null,
         }),
         completeWithTools: async (): Promise<MistralCompletionResult> => {
