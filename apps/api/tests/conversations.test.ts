@@ -14,6 +14,7 @@ import {
   hashPassword,
   parseMasterKey,
 } from '@billing-agent/core';
+import { createConversationEventBus } from '@billing-agent/authoring';
 import { startServer } from '../src/server.ts';
 
 const JWT_SECRET = 'test-jwt-secret';
@@ -81,6 +82,39 @@ class ConversationMemoryStore implements BillingStore {
 
   async upsertConversation(conversation: ConversationDocument): Promise<void> {
     this.conversations.set(conversation.id, conversation);
+  }
+
+  async appendConversationMessage(
+    id: string,
+    message: ConversationDocument['messages'][number],
+  ): Promise<ConversationDocument | null> {
+    const existing = this.conversations.get(id);
+    if (!existing) return null;
+    const updatedAt = new Date().toISOString();
+    const updated: ConversationDocument = {
+      ...existing,
+      messages: [...existing.messages, message],
+      updatedAt,
+    };
+    this.conversations.set(id, updated);
+    return updated;
+  }
+
+  async patchConversation(
+    id: string,
+    fields: Partial<
+      Pick<
+        ConversationDocument,
+        'status' | 'draftWorkflow' | 'draftSchema' | 'draftExtract' | 'jobId'
+      >
+    >,
+  ): Promise<ConversationDocument | null> {
+    const existing = this.conversations.get(id);
+    if (!existing) return null;
+    const updatedAt = new Date().toISOString();
+    const updated: ConversationDocument = { ...existing, ...fields, updatedAt };
+    this.conversations.set(id, updated);
+    return updated;
   }
 
   async getConversation(id: string): Promise<ConversationDocument | null> {
@@ -175,6 +209,15 @@ async function login(port: number, email: string, password: string): Promise<str
 async function setupServer(options?: {
   store?: ConversationMemoryStore;
   onAuthorConversation?: (conversationId: string) => Promise<void>;
+  authoring?: {
+    events: ReturnType<typeof createConversationEventBus>;
+    isRunning: (conversationId: string) => boolean;
+    invoke: (conversationId: string) => Promise<void>;
+    resume: (conversationId: string, value: unknown) => Promise<void>;
+    cancel: (conversationId: string) => Promise<void>;
+    hasCheckpoint: (conversationId: string) => Promise<boolean>;
+    deleteCheckpoint: (conversationId: string) => Promise<void>;
+  };
   env?: NodeJS.ProcessEnv;
 }) {
   const store = options?.store ?? new ConversationMemoryStore();
@@ -185,6 +228,7 @@ async function setupServer(options?: {
     store,
     env: { ...TEST_ENV, ...options?.env },
     onAuthorConversation: options?.onAuthorConversation,
+    authoring: options?.authoring,
   });
   handles.push(handle);
   const token = await login(handle.port, user.email, 'correct-password');
@@ -428,6 +472,65 @@ describe('GET /conversations', () => {
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), []);
+  });
+});
+
+describe('GET /conversations/:id/events', () => {
+  it('is not treated as a conversation id', async () => {
+    const { handle, token, store, user } = await setupServer();
+    const conversation = confirmingConversation(user.id, { id: 'conv-events', status: 'active' });
+    await store.upsertConversation(conversation);
+    const response = await fetch(
+      `http://127.0.0.1:${handle.port}/conversations/conv-events/events`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+    response.body?.cancel();
+  });
+
+  it('returns 404 for another user', async () => {
+    const { handle, store, user } = await setupServer();
+    const conversation = confirmingConversation(user.id, { id: 'conv-private', status: 'active' });
+    await store.upsertConversation(conversation);
+    const other = await createUser(store, 'other@example.com', 'other-password');
+    const otherToken = await login(handle.port, 'other@example.com', 'other-password');
+    const response = await fetch(
+      `http://127.0.0.1:${handle.port}/conversations/conv-private/events`,
+      { headers: { authorization: `Bearer ${otherToken}` } },
+    );
+    assert.equal(response.status, 404);
+  });
+});
+
+describe('POST /conversations/:id/messages in-flight', () => {
+  it('returns 409 when authoring is already running', async () => {
+    const authoring = {
+      events: createConversationEventBus(),
+      isRunning: () => true,
+      invoke: async () => {},
+      resume: async () => {},
+      cancel: async () => {},
+      hasCheckpoint: async () => false,
+      deleteCheckpoint: async () => {},
+    };
+    const { handle, token, store, user } = await setupServer({ authoring });
+    const conversation = confirmingConversation(user.id, { id: 'conv-busy', status: 'active' });
+    await store.upsertConversation(conversation);
+    const response = await fetch(
+      `http://127.0.0.1:${handle.port}/conversations/conv-busy/messages`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ text: 'hello' }),
+      },
+    );
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as { error?: string };
+    assert.equal(body.error, 'Authoring already running');
   });
 });
 

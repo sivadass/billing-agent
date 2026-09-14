@@ -8,12 +8,16 @@ import type {
   SettingsDocument,
 } from '@billing-agent/core';
 import {
-  expireStaleAuthoringSessions,
   handleAuthoringTurn,
   type AuthoringDeps,
   type MistralCompletionResult,
 } from '../src/agent.ts';
-import { deleteAuthoringSession, setAuthoringSession } from '../src/session.ts';
+import {
+  createAuthoringRuntime,
+  createInMemoryCheckpointPort,
+  expireStaleAuthoringSessions,
+} from '../src/runtime.ts';
+import { MemorySaver } from '@langchain/langgraph';
 
 class AuthoringMemoryStore implements BillingStore {
   settings: SettingsDocument = {
@@ -54,6 +58,39 @@ class AuthoringMemoryStore implements BillingStore {
 
   async upsertConversation(conversation: ConversationDocument): Promise<void> {
     this.conversations.set(conversation.id, conversation);
+  }
+
+  async appendConversationMessage(
+    id: string,
+    message: ConversationDocument['messages'][number],
+  ): Promise<ConversationDocument | null> {
+    const existing = this.conversations.get(id);
+    if (!existing) return null;
+    const updatedAt = new Date().toISOString();
+    const updated: ConversationDocument = {
+      ...existing,
+      messages: [...existing.messages, message],
+      updatedAt,
+    };
+    this.conversations.set(id, updated);
+    return updated;
+  }
+
+  async patchConversation(
+    id: string,
+    fields: Partial<
+      Pick<
+        ConversationDocument,
+        'status' | 'draftWorkflow' | 'draftSchema' | 'draftExtract' | 'jobId'
+      >
+    >,
+  ): Promise<ConversationDocument | null> {
+    const existing = this.conversations.get(id);
+    if (!existing) return null;
+    const updatedAt = new Date().toISOString();
+    const updated: ConversationDocument = { ...existing, ...fields, updatedAt };
+    this.conversations.set(id, updated);
+    return updated;
   }
 
   async getConversation(id: string): Promise<ConversationDocument | null> {
@@ -168,8 +205,6 @@ async function runTurn(
         browser: { close: async () => {} } as never,
         context: { close: async () => {} } as never,
         page: mockPage() as never,
-        turnsThisMessage: 0,
-        turnsTotal: 0,
         lastProcessedMessageId: null,
       }),
       completeWithTools: async () => ({ content: 'done' }),
@@ -324,36 +359,100 @@ describe('handleAuthoringTurn', () => {
 });
 
 describe('expireStaleAuthoringSessions', () => {
-  it('marks in-flight conversations expired when no live session exists', async () => {
+  it('does not expire a conversation that has a checkpoint', async () => {
     const store = new AuthoringMemoryStore();
     const conversation = activeConversation({ status: 'confirming' });
     await store.upsertConversation(conversation);
-
-    const count = await expireStaleAuthoringSessions(store);
-    assert.equal(count, 1);
-
-    const updated = await store.getConversation(conversation.id);
-    assert.equal(updated?.status, 'expired');
+    const checkpoints = {
+      ids: new Set([conversation.id]),
+      async has(id: string) {
+        return this.ids.has(id);
+      },
+      async delete(id: string) {
+        this.ids.delete(id);
+      },
+    };
+    const count = await expireStaleAuthoringSessions(store, checkpoints);
+    assert.equal(count, 0);
+    assert.equal((await store.getConversation(conversation.id))?.status, 'confirming');
   });
 
-  it('leaves conversations alone when a session is still live', async () => {
+  it('expires in-progress conversations with no checkpoint', async () => {
     const store = new AuthoringMemoryStore();
-    const conversation = activeConversation();
+    const conversation = activeConversation({ status: 'confirming' });
+    await store.upsertConversation(conversation);
+    const checkpoints = {
+      async has() {
+        return false;
+      },
+      async delete() {},
+    };
+    const count = await expireStaleAuthoringSessions(store, checkpoints);
+    assert.equal(count, 1);
+    assert.equal((await store.getConversation(conversation.id))?.status, 'expired');
+  });
+});
+
+describe('authoring runtime resume', () => {
+  it('resumes after ask_secret and returns to active', async () => {
+    const store = new AuthoringMemoryStore();
+    const conversation = activeConversation({
+      startUrl: 'file:///fixtures/login-extract.html',
+      goal: 'Log in and read account email',
+    });
     await store.upsertConversation(conversation);
 
-    setAuthoringSession(conversation.id, {
-      browser: { close: async () => {} } as never,
-      context: { close: async () => {} } as never,
-      page: mockPage() as never,
-      turnsThisMessage: 0,
-      turnsTotal: 0,
-      lastProcessedMessageId: null,
+    const checkpoints = createInMemoryCheckpointPort();
+    const checkpointer = new MemorySaver();
+    const lock = createBrowserLock();
+    lock.tryAcquire({ kind: 'authoring', id: conversation.id });
+
+    let callCount = 0;
+    const runtime = createAuthoringRuntime({
+      store,
+      lock,
+      env: { MISTRAL_API_KEY: 'test-key' },
+      mistral: store.settings.mistral,
+      browser: store.settings.browser,
+      checkpointer,
+      checkpoints,
+      deps: {
+        launchSession: async () => ({
+          browser: { close: async () => {} } as never,
+          context: { close: async () => {} } as never,
+          page: mockPage() as never,
+          lastProcessedMessageId: null,
+        }),
+        completeWithTools: async (): Promise<MistralCompletionResult> => {
+          callCount += 1;
+          if (callCount === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: 'tc-resume',
+                  name: 'ask_secret',
+                  arguments: JSON.stringify({
+                    keys: ['username', 'password'],
+                    message: 'Please enter your login credentials.',
+                  }),
+                },
+              ],
+            };
+          }
+          return { content: 'Thanks, continuing.' };
+        },
+      },
     });
 
-    const count = await expireStaleAuthoringSessions(store);
-    assert.equal(count, 0);
-    assert.equal((await store.getConversation(conversation.id))?.status, 'active');
+    await runtime.invoke(conversation.id);
+    assert.equal((await store.getConversation(conversation.id))?.status, 'awaiting_secret');
 
-    deleteAuthoringSession(conversation.id);
+    await store.patchConversation(conversation.id, { status: 'active' });
+    await runtime.resume(conversation.id, { secretsSubmitted: ['username', 'password'] });
+
+    const updated = await store.getConversation(conversation.id);
+    assert.ok(updated);
+    assert.equal(updated.status, 'active');
+    assert.ok(updated.messages.some((message) => message.text === 'Thanks, continuing.'));
   });
 });

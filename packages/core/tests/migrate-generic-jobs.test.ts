@@ -142,6 +142,14 @@ class FakeBillingStore implements BillingStore {
 
   async upsertConversation(): Promise<void> {}
 
+  async appendConversationMessage(): Promise<null> {
+    return null;
+  }
+
+  async patchConversation(): Promise<null> {
+    return null;
+  }
+
   async getConversation(): Promise<null> {
     return null;
   }

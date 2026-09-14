@@ -28,6 +28,8 @@ import {
   postConversationMessage,
   postConversationSecrets,
   rejectConversationDraft,
+  subscribeConversationEvents,
+  type ConversationToolName,
 } from '../lib/conversations-api';
 import { sanitizeMessageText } from '../lib/sanitize-message-text';
 import {
@@ -40,6 +42,21 @@ import styles from './chat-page.module.scss';
 
 const DEFAULT_START_URL = 'https://sivadass.in/';
 const DEFAULT_GOAL = 'Grab the contact email address';
+
+function progressLabel(tool: ConversationToolName): string {
+  switch (tool) {
+    case 'snapshot':
+      return 'Snapshot…';
+    case 'click':
+      return 'Click…';
+    case 'fill':
+      return 'Fill…';
+    case 'wait':
+      return 'Wait…';
+    case 'extract_candidates':
+      return 'Extract…';
+  }
+}
 
 const CHANNEL_OPTIONS: Array<{ label: string; value: NotifyChannel['type'] }> = [
   { label: 'ntfy', value: 'ntfy' },
@@ -176,6 +193,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   const [messageText, setMessageText] = useState('');
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [isBusy, setIsBusy] = useState(false);
+  const [progressTool, setProgressTool] = useState<ConversationToolName | null>(null);
   const [abandonOpen, setAbandonOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -207,12 +225,50 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   }, [loadConversation]);
 
   useEffect(() => {
-    if (!conversation || !isPollingConversationStatus(conversation.status)) return;
-    const timer = setInterval(() => {
-      void loadConversation();
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [conversation?.status, loadConversation]);
+    if (!conversation || !isPollingConversationStatus(conversation.status)) {
+      setProgressTool(null);
+      return;
+    }
+
+    const abort = new AbortController();
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let sawEvent = false;
+
+    const startPoll = () => {
+      if (pollTimer) return;
+      pollTimer = setInterval(() => {
+        void loadConversation();
+      }, 2000);
+    };
+
+    startPoll();
+
+    void subscribeConversationEvents(
+      conversationId,
+      (event) => {
+        sawEvent = true;
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = undefined;
+        }
+        if (event.type === 'tool') {
+          setProgressTool(event.tool);
+          return;
+        }
+        setProgressTool(null);
+        void loadConversation();
+      },
+      abort.signal,
+    ).catch(() => {
+      if (!pollTimer) startPoll();
+    });
+
+    return () => {
+      abort.abort();
+      if (pollTimer) clearInterval(pollTimer);
+      if (!sawEvent) setProgressTool(null);
+    };
+  }, [conversation?.status, conversationId, loadConversation]);
 
   const secretKeys = useMemo(
     () => (conversation ? parseSecretKeysFromMessages(conversation.messages) : []),
@@ -329,6 +385,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
   const lastMessage = conversation.messages[conversation.messages.length - 1];
   const isAwaitingReply =
     isBusy ||
+    progressTool !== null ||
     (isPollingConversationStatus(conversation.status) &&
       (conversation.messages.length === 0 || lastMessage?.role === 'user'));
 
@@ -438,7 +495,7 @@ function ChatThread({ conversationId }: { conversationId: string }) {
               <div className={`${styles.bubble} ${styles.waiting}`}>
                 <Loader size={20} aria-label="Agent is working" />
                 <Typography variant="p" className={styles['bubble-text']} margin="0">
-                  Working…
+                  {progressTool ? progressLabel(progressTool) : 'Working…'}
                 </Typography>
               </div>
             </div>

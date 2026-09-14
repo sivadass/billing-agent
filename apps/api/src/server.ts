@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import type { AuthoringRuntime } from '@billing-agent/authoring';
 import type { BillingStore, BrowserLock } from '@billing-agent/core';
 import { applyCors } from './cors.js';
 import { handleRoute } from './routes.js';
@@ -10,6 +11,7 @@ export type StartServerInput = {
   corsOrigins?: string[];
   onRunJob?: (jobId: string) => Promise<string>;
   onAuthorConversation?: (conversationId: string) => Promise<void>;
+  authoring?: AuthoringRuntime;
   /** Source of `SECRETS_MASTER_KEY` for the job secrets routes. */
   env?: NodeJS.ProcessEnv;
   /** Shared with the worker's runner and scheduler so Run now can answer 409 while the browser is in use. */
@@ -33,6 +35,7 @@ export async function startServer(input: StartServerInput): Promise<ApiServerHan
       store: input.store,
       onRunJob: input.onRunJob,
       onAuthorConversation: input.onAuthorConversation,
+      authoring: input.authoring,
       env: input.env ?? process.env,
       lock: input.lock,
     }).catch(

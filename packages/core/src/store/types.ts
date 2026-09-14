@@ -121,6 +121,14 @@ export type ConversationDocument = {
   updatedAt: string;
 };
 
+export type ConversationPatch = {
+  status?: ConversationStatus;
+  draftWorkflow?: ConversationDocument['draftWorkflow'];
+  draftSchema?: ConversationDocument['draftSchema'];
+  draftExtract?: ConversationDocument['draftExtract'];
+  jobId?: string | null;
+};
+
 export type RunDocument = {
   id: string;
   jobId: string;
@@ -187,6 +195,14 @@ export interface BillingStore {
   }): Promise<SecretDocument[]>;
   deleteSecretsForJob(jobId: string): Promise<void>;
   upsertConversation(conversation: ConversationDocument): Promise<void>;
+  appendConversationMessage(
+    id: string,
+    message: ConversationMessage,
+  ): Promise<ConversationDocument | null>;
+  patchConversation(
+    id: string,
+    fields: ConversationPatch,
+  ): Promise<ConversationDocument | null>;
   getConversation(id: string): Promise<ConversationDocument | null>;
   listConversations(options?: {
     userId?: string;

@@ -1,13 +1,23 @@
 import type { Tool } from '@mistralai/mistralai/models/components/tool.js';
 
+export const PLAYWRIGHT_TOOL_NAMES = [
+  'snapshot',
+  'click',
+  'fill',
+  'wait',
+  'extract_candidates',
+] as const;
+
+export type PlaywrightToolName = (typeof PLAYWRIGHT_TOOL_NAMES)[number];
+
 export type AuthoringToolName =
-  | 'snapshot'
-  | 'click'
-  | 'fill'
-  | 'wait'
-  | 'extract_candidates'
+  | PlaywrightToolName
   | 'ask_secret'
   | 'propose_job';
+
+export function isPlaywrightToolName(name: string): name is PlaywrightToolName {
+  return (PLAYWRIGHT_TOOL_NAMES as readonly string[]).includes(name);
+}
 
 export const MAX_TURNS_PER_MESSAGE = 20;
 export const MAX_TURNS_PER_CONVERSATION = 40;

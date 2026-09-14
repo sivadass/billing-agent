@@ -17,6 +17,7 @@ import {
   signRunScreenshot,
   verifyPassword,
 } from '@billing-agent/core';
+import type { AuthoringRuntime } from '@billing-agent/authoring';
 import { requireJwtAuth } from './auth.js';
 import { handleConversationRoutes } from './conversation-routes.js';
 import { signAccessToken } from './jwt.js';
@@ -26,6 +27,7 @@ export type RouteContext = {
   store: BillingStore;
   onRunJob?: (jobId: string) => Promise<string>;
   onAuthorConversation?: (conversationId: string) => Promise<void>;
+  authoring?: AuthoringRuntime;
   authUser?: { id: string; email: string };
   env?: NodeJS.ProcessEnv;
   /**

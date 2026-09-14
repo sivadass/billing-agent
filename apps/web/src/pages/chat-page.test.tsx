@@ -14,6 +14,7 @@ vi.mock('../lib/conversations-api', () => ({
   confirmConversation: vi.fn(),
   rejectConversationDraft: vi.fn(),
   abandonConversation: vi.fn(),
+  subscribeConversationEvents: vi.fn().mockRejectedValue(new Error('sse off')),
   isPollingConversationStatus: vi.fn((status: ConversationDocument['status']) =>
     status === 'active' || status === 'awaiting_secret' || status === 'confirming',
   ),
@@ -135,6 +136,78 @@ describe('ChatPage polling', () => {
       await Promise.resolve();
     });
     expect(conversationsApi.getConversation).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ChatPage SSE', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows Snapshot… when a tool event arrives', async () => {
+    let send: ((event: conversationsApi.ConversationStreamEvent) => void) | undefined;
+    vi.mocked(conversationsApi.subscribeConversationEvents).mockImplementation(
+      async (_id, onEvent) => {
+        send = onEvent;
+        await new Promise(() => {});
+      },
+    );
+    vi.mocked(conversationsApi.getConversation).mockResolvedValue(conversation());
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await flushAsync();
+    await act(async () => {
+      send?.({
+        type: 'tool',
+        tool: 'snapshot',
+        conversationId: 'conv-1',
+        at: '2026-09-14T00:00:00.000Z',
+      });
+    });
+    expect(screen.getByText('Snapshot…')).toBeInTheDocument();
+  });
+
+  it('refetches on turn_end', async () => {
+    let send: ((event: conversationsApi.ConversationStreamEvent) => void) | undefined;
+    vi.mocked(conversationsApi.subscribeConversationEvents).mockImplementation(
+      async (_id, onEvent) => {
+        send = onEvent;
+        await new Promise(() => {});
+      },
+    );
+    vi.mocked(conversationsApi.getConversation)
+      .mockResolvedValueOnce(conversation())
+      .mockResolvedValueOnce(
+        conversation({
+          messages: [
+            {
+              id: 'm2',
+              role: 'assistant',
+              text: 'Done.',
+              createdAt: '2026-09-14T00:01:00.000Z',
+            },
+          ],
+        }),
+      );
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ChatPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await flushAsync();
+    await act(async () => {
+      send?.({ type: 'turn_end', conversationId: 'conv-1', at: '2026-09-14T00:01:00.000Z' });
+    });
+    await flushAsync();
+    expect(conversationsApi.getConversation).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Done.')).toBeInTheDocument();
   });
 });
 

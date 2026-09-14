@@ -17,11 +17,18 @@ import {
   parseMasterKey,
   signConversationScreenshots,
 } from '@billing-agent/core';
+import type { AuthoringRuntime, ConversationStreamEvent } from '@billing-agent/authoring';
 import type { RouteContext } from './routes.js';
 
 export type ConversationRouteContext = RouteContext & {
   onAuthorConversation?: (conversationId: string) => Promise<void>;
+  authoring?: AuthoringRuntime;
 };
+
+function writeSse(res: ServerResponse, event: ConversationStreamEvent): void {
+  res.write(`event: ${event.type}\n`);
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
@@ -313,6 +320,64 @@ async function handleCreateConversation(
   }
 }
 
+async function toSignedConversation(
+  ctx: ConversationRouteContext,
+  conversation: ConversationDocument,
+  userId: string,
+): Promise<ConversationDocument> {
+  const secrets = await ctx.store.listSecrets({ userId, conversationId: conversation.id });
+  let messages = conversation.messages;
+  if (secrets.length > 0) {
+    try {
+      const masterKey = parseMasterKey(ctx.env ?? process.env);
+      messages = redactConversationMessages(conversation.messages, secrets, masterKey);
+    } catch {
+      // No master key: return messages unchanged; ciphertext never appears in messages.
+    }
+  }
+
+  return toConversationResponse(
+    conversation,
+    await signConversationScreenshots(messages, ctx.env ?? process.env),
+  );
+}
+
+async function handleConversationEvents(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: ConversationRouteContext,
+  userId: string,
+  conversationId: string,
+): Promise<void> {
+  const conversation = await getOwnedConversation(ctx.store, conversationId, userId);
+  if (!conversation) {
+    sendJson(res, 404, { error: 'Conversation not found' });
+    return;
+  }
+
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const heartbeat = setInterval(() => {
+    res.write(': ping\n\n');
+  }, 15_000);
+
+  const unsubscribe = ctx.authoring?.events.subscribe(conversationId, (event) => {
+    writeSse(res, event);
+  });
+
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    unsubscribe?.();
+  };
+
+  req.on('close', cleanup);
+  req.on('aborted', cleanup);
+}
+
 async function handleGetConversation(
   res: ServerResponse,
   ctx: ConversationRouteContext,
@@ -325,25 +390,7 @@ async function handleGetConversation(
     return;
   }
 
-  const secrets = await ctx.store.listSecrets({ userId, conversationId });
-  let messages = conversation.messages;
-  if (secrets.length > 0) {
-    try {
-      const masterKey = parseMasterKey(ctx.env ?? process.env);
-      messages = redactConversationMessages(conversation.messages, secrets, masterKey);
-    } catch {
-      // No master key: return messages unchanged; ciphertext never appears in messages.
-    }
-  }
-
-  sendJson(
-    res,
-    200,
-    toConversationResponse(
-      conversation,
-      await signConversationScreenshots(messages, ctx.env ?? process.env),
-    ),
-  );
+  sendJson(res, 200, await toSignedConversation(ctx, conversation, userId));
 }
 
 async function handlePostMessage(
@@ -376,6 +423,11 @@ async function handlePostMessage(
     return;
   }
 
+  if (ctx.authoring?.isRunning(conversationId)) {
+    sendJson(res, 409, { error: 'Authoring already running' });
+    return;
+  }
+
   const now = new Date().toISOString();
   const message: ConversationMessage = {
     id: randomUUID(),
@@ -383,18 +435,19 @@ async function handlePostMessage(
     text,
     createdAt: now,
   };
-  const updated: ConversationDocument = {
-    ...conversation,
-    messages: [...conversation.messages, message],
-    updatedAt: now,
-  };
-  await ctx.store.upsertConversation(updated);
+  const updated = await ctx.store.appendConversationMessage(conversationId, message);
+  if (!updated) {
+    sendJson(res, 404, { error: 'Conversation not found' });
+    return;
+  }
 
-  if (ctx.onAuthorConversation) {
+  if (ctx.authoring) {
+    void ctx.authoring.invoke(conversationId).catch(() => {});
+  } else if (ctx.onAuthorConversation) {
     void ctx.onAuthorConversation(conversationId).catch(() => {});
   }
 
-  sendJson(res, 200, updated);
+  sendJson(res, 200, await toSignedConversation(ctx, updated, userId));
 }
 
 async function handlePostSecrets(
@@ -448,18 +501,21 @@ async function handlePostSecrets(
     await ctx.store.upsertSecret(secret);
   }
 
-  const updated: ConversationDocument = {
-    ...conversation,
-    status: 'active',
-    updatedAt: now,
-  };
-  await ctx.store.upsertConversation(updated);
+  const updated = await ctx.store.patchConversation(conversationId, { status: 'active' });
+  if (!updated) {
+    sendJson(res, 404, { error: 'Conversation not found' });
+    return;
+  }
 
-  if (ctx.onAuthorConversation) {
+  if (ctx.authoring) {
+    void ctx.authoring
+      .resume(conversationId, { secretsSubmitted: Object.keys(values) })
+      .catch(() => {});
+  } else if (ctx.onAuthorConversation) {
     void ctx.onAuthorConversation(conversationId).catch(() => {});
   }
 
-  sendJson(res, 200, updated);
+  sendJson(res, 200, await toSignedConversation(ctx, updated, userId));
 }
 
 async function handleConfirm(
@@ -536,6 +592,7 @@ async function handleConfirm(
   };
   await ctx.store.upsertConversation(saved);
 
+  await ctx.authoring?.deleteCheckpoint(conversationId);
   ctx.lock?.release(conversationId);
 
   sendJson(res, 201, { jobId, conversationId });
@@ -553,16 +610,19 @@ async function handleAbandon(
     return;
   }
 
-  const now = new Date().toISOString();
-  const updated: ConversationDocument = {
-    ...conversation,
-    status: 'abandoned',
-    updatedAt: now,
-  };
-  await ctx.store.upsertConversation(updated);
-  ctx.lock?.release(conversationId);
+  if (ctx.authoring) {
+    await ctx.authoring.cancel(conversationId);
+  } else {
+    ctx.lock?.release(conversationId);
+  }
 
-  sendJson(res, 200, updated);
+  const updated = await ctx.store.patchConversation(conversationId, { status: 'abandoned' });
+  if (!updated) {
+    sendJson(res, 404, { error: 'Conversation not found' });
+    return;
+  }
+
+  sendJson(res, 200, await toSignedConversation(ctx, updated, userId));
 }
 
 async function handleReject(
@@ -581,19 +641,19 @@ async function handleReject(
     return;
   }
 
-  const now = new Date().toISOString();
-  const updated: ConversationDocument = {
-    ...conversation,
-    status: 'active',
-    updatedAt: now,
-  };
-  await ctx.store.upsertConversation(updated);
+  const updated = await ctx.store.patchConversation(conversationId, { status: 'active' });
+  if (!updated) {
+    sendJson(res, 404, { error: 'Conversation not found' });
+    return;
+  }
 
-  if (ctx.onAuthorConversation) {
+  if (ctx.authoring) {
+    void ctx.authoring.resume(conversationId, { keepGoing: true }).catch(() => {});
+  } else if (ctx.onAuthorConversation) {
     void ctx.onAuthorConversation(conversationId).catch(() => {});
   }
 
-  sendJson(res, 200, updated);
+  sendJson(res, 200, await toSignedConversation(ctx, updated, userId));
 }
 
 export async function handleConversationRoutes(
@@ -611,6 +671,12 @@ export async function handleConversationRoutes(
 
   if (method === 'POST' && pathname === '/conversations') {
     await handleCreateConversation(req, res, ctx, userId);
+    return true;
+  }
+
+  const eventsId = parseConversationSubresourceId(pathname, '/events');
+  if (eventsId && method === 'GET') {
+    await handleConversationEvents(req, res, ctx, userId, eventsId);
     return true;
   }
 
