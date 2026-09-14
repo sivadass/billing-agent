@@ -13,6 +13,33 @@ vi.mock('../lib/jobs-api', () => ({
   updateJobSecrets: vi.fn(),
 }));
 
+function renderForm(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/jobs/new" element={<JobFormPage />} />
+        <Route path="/jobs/:jobId" element={<JobFormPage />} />
+        <Route path="/jobs" element={<div>Jobs route</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function fillRequiredCreateFields() {
+  fireEvent.change(screen.getByLabelText(/job id/i), {
+    target: { value: 'home-eb' },
+  });
+  fireEvent.change(screen.getByLabelText(/notify title/i), {
+    target: { value: 'Bill alert' },
+  });
+  fireEvent.change(screen.getByLabelText(/^username$/i), {
+    target: { value: 'user1' },
+  });
+  fireEvent.change(screen.getByLabelText(/^password$/i), {
+    target: { value: 'pass1' },
+  });
+}
+
 describe('JobFormPage', () => {
   beforeEach(() => {
     vi.mocked(jobsApi.listProviders).mockResolvedValue({
@@ -25,7 +52,7 @@ describe('JobFormPage', () => {
       id: 'home-eb',
       provider: 'tnpdcl',
       enabled: true,
-      schedule: null,
+      schedule: '0 9 * * *',
       notify: { title: 'Bill alert' },
     });
     vi.mocked(jobsApi.getJob).mockResolvedValue({
@@ -55,34 +82,48 @@ describe('JobFormPage', () => {
     vi.clearAllMocks();
   });
 
-  it('creates a job with secrets and null schedule when schedule is empty', async () => {
-    render(
-      <MemoryRouter initialEntries={['/jobs/new']}>
-        <Routes>
-          <Route path="/jobs/new" element={<JobFormPage />} />
-          <Route path="/jobs" element={<div>Jobs route</div>} />
-        </Routes>
-      </MemoryRouter>,
-    );
+  it('groups the create form and defaults to a daily 9:00 AM schedule', async () => {
+    renderForm('/jobs/new');
 
     await waitFor(() => {
       expect(screen.getByLabelText(/job id/i)).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByLabelText(/job id/i), {
-      target: { value: 'home-eb' },
+    expect(screen.getByRole('heading', { name: 'Job configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Provider credentials' })).toBeInTheDocument();
+    expect(screen.getByText('Runs every day at 9:00 AM')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create job/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+
+    fillRequiredCreateFields();
+    fireEvent.click(screen.getByRole('button', { name: /create job/i }));
+
+    await waitFor(() => {
+      expect(jobsApi.createJob).toHaveBeenCalledWith({
+        id: 'home-eb',
+        provider: 'tnpdcl',
+        enabled: true,
+        schedule: '0 9 * * *',
+        notify: { title: 'Bill alert' },
+        secrets: { username: 'user1', password: 'pass1' },
+      });
     });
-    fireEvent.change(screen.getByLabelText(/notify title/i), {
-      target: { value: 'Bill alert' },
-    });
-    fireEvent.change(screen.getByLabelText(/^username$/i), {
-      target: { value: 'user1' },
-    });
-    fireEvent.change(screen.getByLabelText(/^password$/i), {
-      target: { value: 'pass1' },
+    expect(screen.queryByRole('button', { name: /add credential/i })).not.toBeInTheDocument();
+    expect(await screen.findByText('Jobs route')).toBeInTheDocument();
+  });
+
+  it('creates a manual job when schedule is set to Manual', async () => {
+    renderForm('/jobs/new');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/job id/i)).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /save job/i }));
+    fillRequiredCreateFields();
+    fireEvent.click(screen.getByTestId('schedule-frequency-trigger'));
+    fireEvent.click(screen.getByTestId('schedule-frequency-option-manual'));
+    fireEvent.click(screen.getByRole('button', { name: /create job/i }));
 
     await waitFor(() => {
       expect(jobsApi.createJob).toHaveBeenCalledWith({
@@ -94,23 +135,17 @@ describe('JobFormPage', () => {
         secrets: { username: 'user1', password: 'pass1' },
       });
     });
-    expect(screen.queryByRole('button', { name: /add credential/i })).not.toBeInTheDocument();
-    expect(await screen.findByText('Jobs route')).toBeInTheDocument();
   });
 
   it('updates job fields and only changed secrets on edit', async () => {
-    render(
-      <MemoryRouter initialEntries={['/jobs/home-eb']}>
-        <Routes>
-          <Route path="/jobs/:jobId" element={<JobFormPage />} />
-          <Route path="/jobs" element={<div>Jobs route</div>} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderForm('/jobs/home-eb');
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^username$/i)).toBeInTheDocument();
     });
+
+    expect(screen.getByRole('button', { name: /save job/i })).toBeInTheDocument();
+    expect(screen.getByText('Runs only when triggered manually')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/^username$/i), {
       target: { value: 'new-user' },

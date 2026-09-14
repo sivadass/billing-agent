@@ -1,0 +1,23 @@
+.schedule-row {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1fr) 8.5rem;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.summary {
+  display: block;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-subtle);
+}
+
+.advanced-toggle {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 600px) {
+  .schedule-row {
+    grid-template-columns: 1fr;
+  }
+}

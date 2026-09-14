@@ -1,7 +1,14 @@
-import { Alert, Button, Container, FormControls, PageHeader } from 'cleanplate';
+import {
+  Alert,
+  Button,
+  FormControls,
+  PageHeader,
+  Typography,
+} from 'cleanplate';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { ScheduleFields } from '../components/schedule-fields';
 import {
   createJob,
   getJob,
@@ -10,10 +17,16 @@ import {
   updateJob,
   updateJobSecrets,
 } from '../lib/jobs-api';
+import { DEFAULT_DAILY_CRON } from '../lib/cron-humanize';
 import type { JobDocument } from '../lib/types';
 import styles from './job-form-page.module.scss';
 
 type ProviderInfo = { id: string; credentialKeys: string[] };
+
+const STATUS_OPTIONS = [
+  { label: 'Active', value: 'active' },
+  { label: 'Disabled', value: 'disabled' },
+];
 
 function labelForCredentialKey(key: string): string {
   return key.charAt(0).toUpperCase() + key.slice(1);
@@ -26,7 +39,7 @@ export function JobFormPage() {
   const [id, setId] = useState(jobId ?? '');
   const [provider, setProvider] = useState('tnpdcl');
   const [enabled, setEnabled] = useState(true);
-  const [schedule, setSchedule] = useState('');
+  const [schedule, setSchedule] = useState(isEdit ? '' : DEFAULT_DAILY_CRON);
   const [notifyTitle, setNotifyTitle] = useState('');
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
@@ -92,6 +105,8 @@ export function JobFormPage() {
     () => providerOptions.find((item) => item.value === provider) ?? null,
     [provider, providerOptions],
   );
+
+  const statusValue = enabled ? STATUS_OPTIONS[0] : STATUS_OPTIONS[1];
 
   const onSubmit = async () => {
     const nextErrors: Record<string, string> = {};
@@ -159,92 +174,138 @@ export function JobFormPage() {
   const title = isEdit ? `Edit job: ${jobId}` : 'Create job';
 
   return (
-    <>
-      <PageHeader title={title} subtitle="Configure the billing job settings." />
+    <div className={styles['job-form']}>
+      <PageHeader
+        className={styles['page-header']}
+        title={title}
+        subtitle="Configure the billing job settings."
+      />
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
       {isLoading ? (
         <div className={styles['loading-state']}>
           <Loader size={56} />
         </div>
       ) : (
-        <Container padding="0" margin="t-3">
-          <FormControls.Input
-            label="Job id"
-            value={id}
-            onChange={(event) => setId(event.target.value)}
-            isDisabled={isEdit}
-            isFluid
-            error={fieldErrors.id}
-          />
-          <FormControls.Select
-            label="Provider"
-            options={providerOptions}
-            value={providerValue}
-            onChange={(selected) => {
-              if (selected && !Array.isArray(selected)) {
-                setProvider(String(selected.value));
-                if (!isEdit) {
-                  setSecretValues({});
-                }
-              }
-            }}
-            isDisabled={isEdit}
-            error={fieldErrors.provider}
-            isFluid
-            margin="t-3"
-          />
-          <FormControls.Toggle
-            label="Enabled"
-            checked={enabled}
-            onChange={(checked) => setEnabled(checked)}
-            margin="t-3"
-          />
-          <FormControls.Input
-            label="Schedule (cron)"
-            value={schedule}
-            onChange={(event) => setSchedule(event.target.value)}
-            placeholder="e.g. 0 9 * * * (leave blank for manual only)"
-            isFluid
-            margin="t-3"
-          />
-          <FormControls.Input
-            label="Notify title"
-            value={notifyTitle}
-            onChange={(event) => setNotifyTitle(event.target.value)}
-            isFluid
-            error={fieldErrors.notifyTitle}
-            margin="t-3"
-          />
-          {credentialKeys.map((key) => (
+        <div className={styles.form}>
+          <section className={styles.section} aria-labelledby="job-configuration-heading">
+            <Typography
+              id="job-configuration-heading"
+              variant="h2"
+              className={styles['section-title']}
+            >
+              Job configuration
+            </Typography>
+            <div className={styles['fields-grid']}>
+              <FormControls.Input
+                label="Job ID"
+                value={id}
+                onChange={(event) => setId(event.target.value)}
+                isDisabled={isEdit}
+                isFluid
+                error={fieldErrors.id}
+                margin="0"
+              />
+              <FormControls.Select
+                label="Provider"
+                options={providerOptions}
+                value={providerValue}
+                onChange={(selected) => {
+                  if (selected && !Array.isArray(selected)) {
+                    setProvider(String(selected.value));
+                    if (!isEdit) {
+                      setSecretValues({});
+                    }
+                  }
+                }}
+                isDisabled={isEdit}
+                error={fieldErrors.provider}
+                searchable={false}
+                clearable={false}
+                isFluid
+                margin="0"
+              />
+              <FormControls.Select
+                label="Status"
+                options={STATUS_OPTIONS}
+                value={statusValue}
+                onChange={(selected) => {
+                  if (selected && !Array.isArray(selected)) {
+                    setEnabled(selected.value === 'active');
+                  }
+                }}
+                searchable={false}
+                clearable={false}
+                isFluid
+                margin="0"
+              />
+            </div>
+            <ScheduleFields value={schedule} onChange={setSchedule} />
+          </section>
+
+          <section className={styles.section} aria-labelledby="notifications-heading">
+            <Typography
+              id="notifications-heading"
+              variant="h2"
+              className={styles['section-title']}
+            >
+              Notifications
+            </Typography>
             <FormControls.Input
-              key={key}
-              label={labelForCredentialKey(key)}
-              type={key === 'password' ? 'password' : 'text'}
-              value={secretValues[key] ?? ''}
-              onChange={(event) =>
-                setSecretValues((current) => ({
-                  ...current,
-                  [key]: event.target.value,
-                }))
-              }
-              placeholder={
-                isEdit && secretSet[key] ? 'Leave blank to keep (currently set)' : undefined
-              }
+              label="Notify title"
+              value={notifyTitle}
+              onChange={(event) => setNotifyTitle(event.target.value)}
               isFluid
-              error={fieldErrors[`secret-${key}`]}
-              margin="t-3"
+              error={fieldErrors.notifyTitle}
+              margin="0"
             />
-          ))}
-          <Container display="flex" gap="2" margin="t-4">
-            <Button variant="solid" onClick={() => void onSubmit()} isDisabled={isSaving}>
-              Save job
-            </Button>
-            <Button variant="outline" onClick={() => navigate('/jobs')}>
+          </section>
+
+          {credentialKeys.length > 0 ? (
+            <section className={styles.section} aria-labelledby="credentials-heading">
+              <Typography
+                id="credentials-heading"
+                variant="h2"
+                className={styles['section-title']}
+              >
+                Provider credentials
+              </Typography>
+              <div className={styles['fields-grid']}>
+                {credentialKeys.map((key) => (
+                  <FormControls.Input
+                    key={key}
+                    label={labelForCredentialKey(key)}
+                    type={key === 'password' ? 'password' : 'text'}
+                    value={secretValues[key] ?? ''}
+                    onChange={(event) =>
+                      setSecretValues((current) => ({
+                        ...current,
+                        [key]: event.target.value,
+                      }))
+                    }
+                    placeholder={
+                      isEdit && secretSet[key]
+                        ? 'Leave blank to keep (currently set)'
+                        : undefined
+                    }
+                    isFluid
+                    error={fieldErrors[`secret-${key}`]}
+                    margin="0"
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <div className={styles.actions}>
+            <Button variant="ghost" onClick={() => navigate('/jobs')}>
               Cancel
             </Button>
-          </Container>
-        </Container>
+            <Button variant="solid" onClick={() => void onSubmit()} isDisabled={isSaving}>
+              {isEdit ? 'Save job' : 'Create job'}
+            </Button>
+          </div>
+        </div>
       )}
-    </>
+    </div>
   );
 }
