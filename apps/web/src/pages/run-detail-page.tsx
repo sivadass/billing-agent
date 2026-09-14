@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { engineLabel } from '../lib/engine-label';
 import { getRun } from '../lib/runs-api';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
 import type { RunDocument } from '../lib/types';
@@ -44,6 +45,12 @@ function shortId(id: string): string {
 
 function yesNo(value: boolean): string {
   return value ? 'Yes' : 'No';
+}
+
+function formatResultValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
 
 type DetailFieldProps = {
@@ -127,7 +134,7 @@ export function RunDetailPage() {
     return () => clearInterval(timer);
   }, [loadRun, run?.status, runId]);
 
-  const billEntries = run?.billSummary ? Object.entries(run.billSummary) : [];
+  const resultEntries = run?.result ? Object.entries(run.result) : [];
 
   return (
     <div className={styles['run-detail']}>
@@ -141,7 +148,7 @@ export function RunDetailPage() {
 
       <PageHeader
         title="Run detail"
-        subtitle={runId ? `ID ${runId}` : 'Live run state and billing details.'}
+        subtitle={runId ? `ID ${runId}` : 'Live run state and extracted result.'}
         primaryCta={
           <Container display="flex" gap="2" padding="0" margin="0">
             <Button variant="outline" onClick={() => navigate('/runs')}>
@@ -212,7 +219,7 @@ export function RunDetailPage() {
               <DetailField label="Job" value={run.jobId} emphasize />
             </Container>
             <Container className={styles.metric} padding="5" showBorder>
-              <DetailField label="Provider" value={run.provider} emphasize />
+              <DetailField label="Engine" value={engineLabel(run)} emphasize />
             </Container>
             <Container className={styles.metric} padding="5" showBorder>
               <DetailField
@@ -237,21 +244,39 @@ export function RunDetailPage() {
               <div className={styles['fields-grid']}>
                 <DetailField label="Error code" value={run.errorCode ?? '—'} mono />
                 <DetailField label="Error message" value={run.errorMessage ?? '—'} />
-                <DetailField label="Screenshot path" value={run.screenshotPath ?? '—'} mono />
               </div>
             </Section>
           ) : null}
 
-          <Section title="Bill summary">
-            {billEntries.length > 0 ? (
-              <div className={styles['bill-grid']}>
-                {billEntries.map(([key, value]) => (
-                  <DetailField key={key} label={key} value={value} emphasize />
+          {run.screenshotUrl || run.screenshotPath ? (
+            <Section title="Screenshot">
+              {run.screenshotUrl ? (
+                <img
+                  src={run.screenshotUrl}
+                  alt="Error screenshot"
+                  className={styles.screenshot}
+                />
+              ) : (
+                <DetailField label="Path" value={run.screenshotPath ?? '—'} mono />
+              )}
+            </Section>
+          ) : null}
+
+          <Section title="Result">
+            {resultEntries.length > 0 ? (
+              <div className={styles['result-grid']}>
+                {resultEntries.map(([key, value]) => (
+                  <DetailField
+                    key={key}
+                    label={key}
+                    value={formatResultValue(value)}
+                    emphasize
+                  />
                 ))}
               </div>
             ) : (
               <Typography variant="p" margin="0" className={styles.muted}>
-                No bill summary for this run.
+                No result for this run.
               </Typography>
             )}
           </Section>
@@ -261,7 +286,6 @@ export function RunDetailPage() {
               <DetailField label="Recovery attempted" value={yesNo(run.recoveryAttempted)} />
               <DetailField label="Recovery succeeded" value={yesNo(run.recoverySucceeded)} />
               <DetailField label="Overlay activated" value={yesNo(run.overlayActivated)} />
-              <DetailField label="Screenshot path" value={run.screenshotPath ?? '—'} mono />
               <DetailField
                 label="Finished"
                 value={

@@ -169,6 +169,15 @@ Open the printed URL:
 3. Create a job and confirm its Mongo document has your `userId`
 4. Log out and confirm hubs are inaccessible
 
+## 11a) Optional: chat authoring smoke (Slice 3)
+
+With the daemon running (`onAuthorConversation` wired) and the web app open:
+
+1. Open **Chat** and start a session with start URL `https://sivadass.in/` and goal “Grab the contact email address”.
+2. Wait for the agent to reach **confirming** with sample `email` = `contact@sivadass.in`.
+3. Click **Confirm job** and verify you land on the saved workflow job.
+4. **Run now** on that job and confirm a successful run without invoking the authoring LLM again.
+
 ## 11) Validate one CLI run + run history
 
 Run one job:

@@ -151,3 +151,5 @@ jobs.json
 tmp/
 !.env.example
 .DS_Store
+
+.cursor/skills/visual-design-qa/audits/

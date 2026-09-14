@@ -34,6 +34,36 @@
       "schedule": null,
       "credentials": {},
       "notify": { "title": "Dummy Bill" }
+    },
+    {
+      "id": "sivadass-in-email",
+      "userId": "",
+      "name": "Sivadass contact email",
+      "enabled": true,
+      "schedule": null,
+      "startUrl": "https://sivadass.in/",
+      "engine": "workflow",
+      "goal": "Grab the contact email address",
+      "schema": [{ "key": "email", "label": "Email", "type": "string" }],
+      "workflow": [
+        { "id": "goto-home", "type": "goto", "url": "https://sivadass.in/" },
+        {
+          "id": "extract-email",
+          "type": "extract",
+          "fields": [
+            { "key": "email", "selector": "a[href^=\"mailto:\"]", "strategy": "text" }
+          ]
+        }
+      ],
+      "secretIds": [],
+      "notify": {
+        "title": "Sivadass contact email",
+        "on": "always",
+        "channel": { "type": "ntfy", "topic": "" }
+      },
+      "lastResult": null,
+      "createdAt": "2026-08-16T00:00:00.000Z",
+      "updatedAt": "2026-08-16T00:00:00.000Z"
     }
   ]
 }

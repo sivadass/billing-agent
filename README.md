@@ -15,8 +15,8 @@ apps/
   web/       # @billing-agent/web (Vite + React API shell)
   worker/    # @billing-agent/worker (CLI + scheduler daemon)
 packages/
-  core/      # @billing-agent/core (adapters, config, runner, recovery, store)
-  price-monitor/ # @billing-agent/price-monitor (price extraction, compare, watch runner)
+  core/      # @billing-agent/core (adapters, config, runner, recovery, store, workflow)
+  authoring/ # @billing-agent/authoring (chat authoring agent)
 ```
 
 ## Requirements
@@ -45,6 +45,26 @@ Key runtime variables:
 | `MISTRAL_API_KEY` | Mistral API key (used for captcha + recovery) |
 | `TNPDCL_USERNAME` | TNPDCL login |
 | `TNPDCL_PASSWORD` | TNPDCL login |
+| `SECRETS_MASTER_KEY` | AES-256-GCM key wrapping per-job secrets (`secrets` collection); required before running/migrating any job with credentials |
+| `B2_ACCESS_KEY_ID` | Backblaze B2 application key id (alias: `B2_KEY_ID`) |
+| `B2_SECRET_ACCESS_KEY` | Backblaze B2 application key (alias: `B2_APPLICATION_KEY`) |
+| `B2_BUCKET_NAME` | Private B2 bucket for chat and run screenshots (alias: `B2_BUCKET`) |
+| `B2_ENDPOINT` | S3-compatible endpoint, e.g. `https://s3.us-east-005.backblazeb2.com` |
+| `B2_PRESIGNED_EXPIRES_SECONDS` | Signed GET URL lifetime (default `3600`) |
+
+### Generating `SECRETS_MASTER_KEY`
+
+A 32-byte key, hex (64 chars) or base64 (44 chars):
+
+```bash
+# hex
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# or base64
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Store the result in `.env` / the host's secret manager. Losing or rotating this key makes every existing `secrets` row undecryptable — back it up like a password. Missing or malformed values raise `ConfigError` the moment a job actually needs to encrypt/decrypt a secret (not at process boot).
 
 ## Install
 
@@ -97,6 +117,20 @@ There are no register / forgot-password APIs. Users are provisioned by inserting
 
 4. Log in from the web app (or `POST /auth/login`) with the email/password to get a Bearer JWT.
 
+## Migrating legacy jobs/watches to the generic job model
+
+`migrate-generic-jobs` is a one-time, idempotent migration from the old `provider` / `credentialsEnv` billing jobs and the separate `watches` / `price_checks` pipeline onto the unified `JobDocument` / `RunDocument` model (`engine: 'adapter' | 'workflow'`). Requires `SECRETS_MASTER_KEY` (see above) whenever a legacy job actually has `credentialsEnv` values to encrypt.
+
+```bash
+npm run dev -w @billing-agent/worker -- migrate-generic-jobs
+```
+
+- Legacy billing jobs (`provider` + `credentialsEnv`): each `credentialsEnv` entry is resolved from `process.env` and encrypted into a `secrets` row (never written to the job document); the job gets `engine: 'adapter'`, `adapterId: provider`, and the adapter's default `startUrl`.
+- Watches become `engine: 'workflow'` jobs with a deterministic `goto` + `extract` workflow (not runnable until the workflow interpreter ships); `price_checks` rows are copied into `runs`.
+- Settings keep `ntfy.baseUrl` / `priority` / `jobsGeneration`; the resolved ntfy topic becomes `ntfy.defaultTopic` and `topicEnv` is dropped.
+- Safe to re-run: jobs that already have `engine` set, watches with an existing workflow job, and price checks with an existing run are all skipped. After every legacy watch has a corresponding workflow job, the `watches` and `price_checks` collections are dropped.
+- Preflight: a job that already has `engine` set is validated before it is skipped, so a stored document the API and runner would reject (for example a `workflow` job with no `extract` step) fails the migration naming the job id, instead of surfacing later as a broken `GET /jobs`. Nothing is rewritten — fix or delete the document and re-run. Writes go through the same validation, so only pre-existing documents can trip this.
+
 ## Commands
 
 ```bash
@@ -108,12 +142,6 @@ npm run dev -w @billing-agent/worker -- run --job smoke-test
 
 # Run all enabled jobs once
 npm run dev -w @billing-agent/worker -- run --all
-
-# Run one watch immediately
-npm run dev -w @billing-agent/worker -- run-watch --id craft-glory-old-skool-vb
-
-# Run all enabled watches once
-npm run dev -w @billing-agent/worker -- run-watches
 
 # Long-running daemon: scheduler + embedded HTTP API
 npm run start
@@ -135,13 +163,7 @@ Base URL: `http://localhost:${HTTP_PORT:-8080}`
 - `POST /jobs/:id/run` (manual trigger, returns `202 { id }`)
 - `PATCH /jobs/:id`
 - `DELETE /jobs/:id` (soft-disable via `enabled: false`)
-- `GET /watches`
-- `POST /watches`
-- `GET /watches/:id`
-- `PATCH /watches/:id`
-- `DELETE /watches/:id` (hard delete + cascades `price_checks`)
-- `POST /watches/:id/check` (manual trigger, returns `202 { id }`, `409` if running)
-- `GET /watches/:id/checks`
+- `GET /conversations`, `POST /conversations`, … (chat authoring)
 
 `/jobs` and `/runs` routes are scoped to the authenticated user; accessing another user's job/run returns `404`.
 
@@ -163,13 +185,98 @@ curl -X POST http://localhost:8080/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "id": "smoke-test",
-    "provider": "dummy",
+    "name": "Dummy Bill",
+    "engine": "adapter",
+    "adapterId": "dummy",
     "enabled": true,
     "schedule": null,
-    "credentialsEnv": {},
-    "notify": { "title": "Dummy Bill" }
+    "notify": {
+      "title": "Dummy Bill",
+      "on": "always",
+      "channel": { "type": "ntfy", "topic": "bills" }
+    }
   }'
 ```
+
+A `workflow` job replaces `adapterId` with a `startUrl` plus `schema` /
+`workflow` steps:
+
+```bash
+curl -X POST http://localhost:8080/jobs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "shoe-price",
+    "name": "Shoe price",
+    "engine": "workflow",
+    "startUrl": "https://sivadass.in/",
+    "goal": "Read the listed price",
+    "schema": [{ "key": "price", "label": "Price", "type": "price" }],
+    "workflow": [
+      { "id": "open", "type": "goto", "url": "https://sivadass.in/" },
+      {
+        "id": "read-price",
+        "type": "extract",
+        "fields": [
+          { "key": "price", "selector": ".product-price", "strategy": "price" }
+        ]
+      }
+    ],
+    "notify": { "title": "Shoe price" }
+  }'
+```
+
+Shapes used above:
+
+- `schema` entries are `{ key, label, type }`, where `type` is one of `string`,
+  `number`, `price`, `date`. They describe the `result` a run produces.
+- `workflow` steps are `{ id, type, ... }`: `goto` takes `url`, `fill` takes
+  `selector` plus `source` (`secret` with a `secretKey`, or `literal` with a
+  `value`), `click` and `assert` take `selector`, `wait` takes an optional
+  `selector` / `timeoutMs`, `solve_captcha` takes `imageSelector` /
+  `inputSelector`, and `extract` takes `fields` of
+  `{ key, selector?, strategy? }` with `strategy` one of `text`, `price`,
+  `json_ld`, `shopify_json`. Steps are validated with the same function the
+  interpreter runs, so a workflow that would fail at run time is a `400` here:
+  step ids must be unique, `goto` takes a public http(s) URL, a `text` field
+  needs a `selector`, and a `wait` needs a `selector` or a `timeoutMs`.
+  Repeating a field `key` inside one `extract` step lists strategy candidates
+  for that key, tried in order until one returns a value.
+
+Notes on the payload:
+
+- The old `provider` spelling is still accepted as an alias for `adapterId` so
+  existing clients keep working, but it is never stored or returned — responses
+  are canonical (`engine`, `adapterId`, `startUrl`, `result`).
+- Omitted fields fall back to defaults (`notify.on` to `always`, `notify.channel`
+  to ntfy). A field that *is* supplied must be valid: a bad `enabled`,
+  `notify.on`, or channel is a `400` rather than a silent default.
+- `startUrl`, a `webhook` channel `url`, and an ntfy `baseUrl` must be public
+  http(s) URLs; localhost, private and link-local ranges, the cloud metadata
+  address, `0.0.0.0`, IPv4-mapped IPv6 forms of those ranges, and `.local` /
+  `.internal` hosts are rejected (no DNS lookup happens, so a hostname that
+  resolves to a private address is not blocked). A `workflow` job must supply a
+  `startUrl` and at least one `extract` step to replay; `adapter` jobs keep an
+  empty `workflow`.
+- `secretIds`, `lastResult`, `userId`, and the timestamps are server-owned and
+  ignored if sent.
+
+Secrets are write-only. `GET /jobs/:id/secrets` lists key names only, and
+`PUT /jobs/:id/secrets` stores new values encrypted with `SECRETS_MASTER_KEY`
+(omitted keys keep their current value; a re-sent key is re-encrypted in place):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/jobs/smoke-test/secrets
+# {"keys":[{"key":"TNPDCL_PASSWORD","set":true}]}
+
+curl -X PUT http://localhost:8080/jobs/smoke-test/secrets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "values": { "TNPDCL_PASSWORD": "new-password" } }'
+```
+
+Stored values are never returned by any endpoint, and the write is rejected with
+`409` while that job has a run in flight.
 
 ## Postman collection
 
@@ -184,17 +291,13 @@ Collection variables:
 - `jobId` (default `smoke-test`)
 - `runId` (set after listing runs)
 
-The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
+The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`, `/jobs/:id/secrets`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
 
-## Price monitor notes
+## Workflow job notes
 
-- Default watch schedule: `0 9 * * *` with cron timezone `Asia/Kolkata` (IST).
-- Alert rule (v1): notify only when the new price is lower than the previous successful price **and** currency/source match.
-- First successful check creates the baseline and does not notify.
-- Currency/source changes reset the baseline (no notify).
-- Non-positive extracted prices are treated as failed checks (no baseline update, no notify).
-- SSRF protection blocks obvious local/private/link-local/metadata targets before Shopify fetch and browser navigation.
-- Residual risk accepted in v1: DNS rebinding after validation is not mitigated.
+- Price-tracking jobs use `engine: 'workflow'` with extract strategies (`shopify_json`, `price`, etc.) defined in the job's workflow.
+- Default cron timezone for scheduled jobs: `Asia/Kolkata` (IST).
+- Notify rule `on: 'drop'` compares the new extract result to `lastResult` and sends only when the price decreases (same semantics as the old price-watch stack).
 
 ## Overlay learning behavior
 
@@ -235,7 +338,7 @@ Vite + React + Cleanplate SPA hosted on Vercel. Talks to the worker API via `VIT
 
 - `/login` (public)
 - `/jobs`, `/jobs/new`, `/jobs/:jobId`
-- `/watches`, `/watches/new`, `/watches/:watchId/edit`, `/watches/:watchId`
+- `/chat`, `/chat/:conversationId` (author a workflow job via chat)
 - `/runs`, `/runs/:runId` (polls run detail while running)
 - `/status`
 

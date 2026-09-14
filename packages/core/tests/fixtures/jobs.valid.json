@@ -29,11 +29,24 @@
     {
       "id": "smoke-test",
       "userId": "user-1",
-      "provider": "dummy",
+      "name": "Dummy Bill",
       "enabled": true,
       "schedule": null,
-      "credentials": {},
-      "notify": { "title": "Dummy Bill" }
+      "startUrl": "https://example.test/dummy",
+      "engine": "adapter",
+      "adapterId": "dummy",
+      "goal": "",
+      "schema": [],
+      "workflow": [],
+      "secretIds": [],
+      "notify": {
+        "title": "Dummy Bill",
+        "on": "always",
+        "channel": { "type": "ntfy", "topic": "" }
+      },
+      "lastResult": null,
+      "createdAt": "2026-08-16T00:00:00.000Z",
+      "updatedAt": "2026-08-16T00:00:00.000Z"
     }
   ]
 }

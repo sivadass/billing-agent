@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError } from './errors.js';
 import type { BillingStore, JobDocument, SettingsDocument } from './store/types.js';
+import { assertJobDocument } from './store/assert-job.js';
+import { decryptSecret, parseMasterKey } from './secrets.js';
 
 export type BrowserConfig = SettingsDocument['browser'];
 export type JobConfig = JobDocument;
@@ -52,6 +54,13 @@ function requireBoolean(value: unknown, name: string): boolean {
   return value;
 }
 
+function requireNumber(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ConfigError(`${name} must be a finite number`);
+  }
+  return value;
+}
+
 /** Owner userId is optional in seed JSON; unset/empty means orphaned until `migrate-job-owners` assigns it. */
 function optionalOwnerString(value: unknown, name: string): string {
   if (value === undefined) {
@@ -72,20 +81,49 @@ function resolveEnv(env: NodeJS.ProcessEnv, envName: unknown, field: string): st
   return value;
 }
 
-/** Resolves a job's credentials from the environment. Called lazily by the job runner, not at config load time. */
-export function resolveJobCredentials(
-  job: JobConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): Record<string, string> {
-  const credentials: Record<string, string> = {};
-  for (const [field, envName] of Object.entries(job.credentialsEnv)) {
-    credentials[field] = resolveEnv(
-      env,
-      envName,
-      `jobs.${job.id}.credentials.${field}Env`,
-    );
+function resolveNtfyTopic(
+  ntfy: SeedSettings['ntfy'],
+  env: NodeJS.ProcessEnv,
+): string {
+  if (ntfy.topicEnv) {
+    return resolveEnv(env, ntfy.topicEnv, 'ntfy.topicEnv');
   }
-  return credentials;
+  if (ntfy.defaultTopic) {
+    return ntfy.defaultTopic;
+  }
+  const fromEnv = env.NTFY_TOPIC;
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) {
+    return fromEnv;
+  }
+  throw new ConfigError('Missing ntfy topic: set ntfy.topicEnv, ntfy.defaultTopic, or NTFY_TOPIC');
+}
+
+/**
+ * Resolves a job's secrets from encrypted Mongo documents. Called lazily by
+ * the job runner, not at config load time. Never logs plaintext or
+ * ciphertext; decryption happens in-memory only for the duration of the run.
+ */
+export async function resolveJobSecrets(
+  job: JobDocument,
+  store: BillingStore,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, string>> {
+  if (job.secretIds.length === 0) {
+    return {};
+  }
+
+  const key = parseMasterKey(env);
+  const secretDocs = await store.listSecrets({
+    userId: job.userId,
+    jobId: job.id,
+  });
+
+  const secrets: Record<string, string> = {};
+  for (const doc of secretDocs) {
+    if (!job.secretIds.includes(doc.id)) continue;
+    secrets[doc.key] = decryptSecret(doc, key);
+  }
+  return secrets;
 }
 
 /** Resolves the Mistral API key from the environment. Called lazily, only when a captcha actually needs solving. */
@@ -128,42 +166,56 @@ function parseBrowserConfig(browser: JsonObject): BrowserConfig {
   };
 }
 
-function parseJob(value: unknown, index: number): JobConfig {
+function parseLegacySeedJob(value: unknown, index: number): JobDocument {
   const job = requireObject(value, `jobs[${index}]`);
   const schedule = job.schedule;
   if (schedule !== null && typeof schedule !== 'string') {
     throw new ConfigError(`jobs[${index}].schedule must be a string or null`);
   }
 
-  const rawCredentials = requireObject(
-    job.credentials,
-    `jobs[${index}].credentials`,
-  );
-  const credentialsEnv: Record<string, string> = {};
-  for (const [key, envName] of Object.entries(rawCredentials)) {
-    if (!key.endsWith('Env') || key.length === 3) {
-      throw new ConfigError(
-        `jobs[${index}].credentials.${key} must be an environment reference`,
-      );
-    }
-    credentialsEnv[key.slice(0, -3)] = requireString(
-      envName,
-      `jobs[${index}].credentials.${key}`,
-    );
-  }
-
   const notify = requireObject(job.notify, `jobs[${index}].notify`);
-  return {
-    id: requireString(job.id, `jobs[${index}].id`),
+  const title = requireString(notify.title, `jobs[${index}].notify.title`);
+  const id = requireString(job.id, `jobs[${index}].id`);
+  const provider = requireString(job.provider, `jobs[${index}].provider`);
+  const now = new Date().toISOString();
+
+  return assertJobDocument({
+    id,
     userId: optionalOwnerString(job.userId, `jobs[${index}].userId`),
-    provider: requireString(job.provider, `jobs[${index}].provider`),
+    name: title,
     enabled: requireBoolean(job.enabled, `jobs[${index}].enabled`),
     schedule,
-    credentialsEnv,
+    startUrl: '',
+    engine: 'adapter',
+    adapterId: provider,
+    goal: '',
+    schema: [],
+    workflow: [],
+    secretIds: [],
     notify: {
-      title: requireString(notify.title, `jobs[${index}].notify.title`),
+      title,
+      on: 'always',
+      channel: { type: 'ntfy', topic: '' },
     },
-  };
+    lastResult: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function parseNewSeedJob(value: unknown, index: number): JobDocument {
+  return assertJobDocument(value);
+}
+
+function parseJob(value: unknown, index: number): JobDocument {
+  const job = requireObject(value, `jobs[${index}]`);
+  if (typeof job.engine === 'string') {
+    return parseNewSeedJob(value, index);
+  }
+  if (typeof job.provider === 'string') {
+    return parseLegacySeedJob(value, index);
+  }
+  throw new ConfigError(`jobs[${index}] must include engine or provider`);
 }
 
 export function loadSeedConfig(options?: {
@@ -197,6 +249,15 @@ export function loadSeedConfig(options?: {
     throw new ConfigError('jobs must be an array');
   }
 
+  const topicEnv = ntfy.topicEnv;
+  if (topicEnv !== undefined && typeof topicEnv !== 'string') {
+    throw new ConfigError('ntfy.topicEnv must be a string');
+  }
+  const defaultTopic = ntfy.defaultTopic;
+  if (defaultTopic !== undefined && typeof defaultTopic !== 'string') {
+    throw new ConfigError('ntfy.defaultTopic must be a string');
+  }
+
   return {
     configPath,
     settings: {
@@ -205,7 +266,8 @@ export function loadSeedConfig(options?: {
           ntfy.baseUrl === undefined
             ? 'https://ntfy.sh'
             : requireString(ntfy.baseUrl, 'ntfy.baseUrl'),
-        topicEnv: requireString(ntfy.topicEnv, 'ntfy.topicEnv'),
+        ...(topicEnv === undefined ? {} : { topicEnv }),
+        ...(defaultTopic === undefined ? {} : { defaultTopic }),
         priority:
           ntfy.priority === undefined
             ? 'default'
@@ -223,20 +285,9 @@ export function loadSeedConfig(options?: {
         root.jobsGeneration === undefined
           ? 0
           : requireNumber(root.jobsGeneration, 'jobsGeneration'),
-      watchesGeneration:
-        root.watchesGeneration === undefined
-          ? 0
-          : requireNumber(root.watchesGeneration, 'watchesGeneration'),
     },
     jobs: root.jobs.map((job, index) => parseJob(job, index)),
   };
-}
-
-function requireNumber(value: unknown, name: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new ConfigError(`${name} must be a finite number`);
-  }
-  return value;
 }
 
 function toAppConfig(
@@ -249,7 +300,7 @@ function toAppConfig(
     configPath,
     ntfy: {
       baseUrl: settings.ntfy.baseUrl,
-      topic: resolveEnv(env, settings.ntfy.topicEnv, 'ntfy.topicEnv'),
+      topic: resolveNtfyTopic(settings.ntfy, env),
       priority: settings.ntfy.priority,
     },
     mistral: settings.mistral,
@@ -279,7 +330,6 @@ export async function loadConfigFromStore(
     mistral: settingsDoc.mistral,
     browser: settingsDoc.browser,
     jobsGeneration: settingsDoc.jobsGeneration,
-    watchesGeneration: settingsDoc.watchesGeneration ?? 0,
   };
   return toAppConfig('mongodb://runtime', settings, jobs, options?.env ?? process.env);
 }

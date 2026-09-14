@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { humanizeTimestamp } from './timestamp-humanize';
+import { humanizeTimestamp, formatClockTime, formatDateHeading, isSameLocalDay } from './timestamp-humanize';
 
 describe('humanizeTimestamp', () => {
   const now = new Date('2026-08-09T12:00:00.000Z');
@@ -33,5 +33,20 @@ describe('humanizeTimestamp', () => {
     const label = humanizeTimestamp('2026-07-01T12:00:00.000Z', now);
     expect(label).toMatch(/2026/);
     expect(label).toMatch(/Jul|July|7/);
+  });
+
+  it('formats a 24-hour clock time', () => {
+    expect(formatClockTime('2026-03-15T14:30:00.000Z')).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  it('formats a long date heading', () => {
+    expect(formatDateHeading('2026-03-15T14:30:00.000Z')).toMatch(/March/);
+    expect(formatDateHeading('2026-03-15T14:30:00.000Z')).toMatch(/15/);
+    expect(formatDateHeading('2026-03-15T14:30:00.000Z')).toMatch(/2026/);
+  });
+
+  it('compares local calendar days', () => {
+    expect(isSameLocalDay('2026-03-15T10:00:00.000Z', '2026-03-15T12:00:00.000Z')).toBe(true);
+    expect(isSameLocalDay('2026-03-15T10:00:00.000Z', '2026-03-16T10:00:00.000Z')).toBe(false);
   });
 });

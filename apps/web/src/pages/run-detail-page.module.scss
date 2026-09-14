@@ -88,7 +88,7 @@
   word-break: break-all;
 }
 
-.bill-grid {
+.result-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
   gap: var(--space-5) var(--space-6);
@@ -101,4 +101,14 @@
 .muted {
   color: var(--text-subtle);
   line-height: 1.5;
+}
+
+.screenshot {
+  display: block;
+  width: 100%;
+  max-width: 48rem;
+  height: auto;
+  overflow: hidden;
+  border: 1px solid var(--primary-brand-lightest);
+  border-radius: var(--radius-large);
 }

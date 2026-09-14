@@ -1,0 +1,40 @@
+{
+  "ntfy": {
+    "baseUrl": "https://ntfy.sh",
+    "topicEnv": "NTFY_TOPIC",
+    "priority": "default"
+  },
+  "mistral": {
+    "apiKeyEnv": "MISTRAL_API_KEY",
+    "model": "mistral-small-latest"
+  },
+  "browser": {
+    "headless": true,
+    "timeoutMs": 60000,
+    "saveErrorScreenshot": true
+  },
+  "jobs": [
+    {
+      "id": "smoke-test",
+      "userId": "user-1",
+      "name": "Dummy Bill",
+      "enabled": true,
+      "schedule": null,
+      "startUrl": "https://example.test/dummy",
+      "engine": "adapter",
+      "adapterId": "dummy",
+      "goal": "",
+      "schema": [],
+      "workflow": [],
+      "secretIds": [],
+      "notify": {
+        "title": "Dummy Bill",
+        "on": "always",
+        "channel": { "type": "ntfy", "topic": "" }
+      },
+      "lastResult": null,
+      "createdAt": "2026-08-16T00:00:00.000Z",
+      "updatedAt": "2026-08-16T00:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "ntfy": {
+    "baseUrl": "https://ntfy.sh",
+    "priority": "default"
+  },
+  "mistral": {
+    "apiKeyEnv": "MISTRAL_API_KEY",
+    "model": "mistral-small-latest"
+  },
+  "browser": {
+    "headless": true,
+    "timeoutMs": 60000,
+    "saveErrorScreenshot": true
+  },
+  "jobs": []
+}
