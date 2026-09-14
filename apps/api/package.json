@@ -9,6 +9,7 @@
     "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
+    "@billing-agent/authoring": "*",
     "@billing-agent/core": "*",
     "jose": "^6.2.8"
   },
