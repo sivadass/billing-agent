@@ -44,6 +44,8 @@ class MemoryWatchStore {
     this.watches.set(watch.id, watch);
   }
 
+  async deleteJob() {}
+
   async deleteWatch(id: string) {
     this.watches.delete(id);
   }
@@ -89,6 +91,8 @@ class MemoryWatchStore {
   async getRun() {
     return null;
   }
+
+  async deleteRun() {}
 
   async findUserByEmail() {
     return null;

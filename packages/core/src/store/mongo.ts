@@ -94,6 +94,13 @@ export function createBillingStoreFromCollections(
       await collections.jobs.updateOne({ id: job.id }, { $set: job }, { upsert: true });
     },
 
+    async deleteJob(id) {
+      await collections.runs.deleteMany({ jobId: id });
+      await collections.secrets.deleteMany({ jobId: id });
+      await collections.overlays.deleteMany({ jobId: id });
+      await collections.jobs.deleteOne({ id });
+    },
+
     async listSecrets(jobId) {
       const secrets = await collections.secrets.find({ jobId }).toArray();
       return secrets.sort((a, b) => a.key.localeCompare(b.key));
@@ -280,6 +287,10 @@ export function createBillingStoreFromCollections(
 
     async getRun(id) {
       return collections.runs.findOne({ id });
+    },
+
+    async deleteRun(id) {
+      await collections.runs.deleteOne({ id });
     },
 
     async findUserByEmail(email) {

@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { Loader } from '../components/loader';
 import { RunsTable } from '../components/runs-table';
 import { listJobs } from '../lib/jobs-api';
-import { listRuns } from '../lib/runs-api';
+import { deleteRun, listRuns } from '../lib/runs-api';
+import { ApiClientError } from '../lib/api-client';
 import type { JobDocument, RunDocument } from '../lib/types';
 import styles from './runs-page.module.scss';
 
@@ -25,6 +26,7 @@ export function RunsPage() {
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     void listJobs()
@@ -71,6 +73,18 @@ export function RunsPage() {
     STATUS_OPTIONS.find((option) => option.value === selectedStatus) ??
     STATUS_OPTIONS[0];
 
+  const handleDelete = async (run: RunDocument) => {
+    setActionError(null);
+    try {
+      await deleteRun(run.id);
+      await loadRuns();
+    } catch (err) {
+      setActionError(
+        err instanceof ApiClientError ? err.message : 'Failed to delete run',
+      );
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -106,6 +120,9 @@ export function RunsPage() {
         </div>
       </div>
       {error ? <Alert variant="error" margin="t-3" message={error} /> : null}
+      {actionError ? (
+        <Alert variant="error" margin="t-3" message={actionError} />
+      ) : null}
       {isLoading ? (
         <div className={styles['loading-state']}>
           <Loader size={56} />
@@ -115,6 +132,7 @@ export function RunsPage() {
         <RunsTable
           runs={filteredRuns}
           onSelectRun={(run) => navigate(`/runs/${run.id}`)}
+          onDelete={handleDelete}
         />
       ) : null}
     </>

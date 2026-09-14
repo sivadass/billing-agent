@@ -20,6 +20,7 @@ type JobsTableProps = {
   onEdit: (job: JobDocument) => void;
   onDisable: (job: JobDocument) => Promise<void> | void;
   onEnable: (job: JobDocument) => Promise<void> | void;
+  onDelete: (job: JobDocument) => Promise<void> | void;
 };
 
 type JobsTableRow = {
@@ -37,6 +38,7 @@ type JobRowMoreMenuProps = {
   onEdit: (job: JobDocument) => void;
   onEnable: (job: JobDocument) => Promise<void> | void;
   onRequestDisable: (job: JobDocument) => void;
+  onRequestDelete: (job: JobDocument) => void;
   onClose?: () => void;
   className?: string;
 };
@@ -46,6 +48,7 @@ function JobRowMoreMenu({
   onEdit,
   onEnable,
   onRequestDisable,
+  onRequestDelete,
   onClose,
   className,
 }: JobRowMoreMenuProps) {
@@ -54,6 +57,7 @@ function JobRowMoreMenu({
     row.enabled
       ? { label: 'Disable', value: 'disable', icon: 'cancel' as const }
       : { label: 'Enable', value: 'enable', icon: 'check_circle' as const },
+    { label: 'Delete', value: 'delete', icon: 'delete' as const },
   ];
 
   return (
@@ -69,6 +73,8 @@ function JobRowMoreMenu({
           onRequestDisable(row.job);
         } else if (item.value === 'enable') {
           void onEnable(row.job);
+        } else if (item.value === 'delete') {
+          onRequestDelete(row.job);
         }
         onClose?.();
       }}
@@ -83,8 +89,10 @@ export function JobsTable({
   onEdit,
   onDisable,
   onEnable,
+  onDelete,
 }: JobsTableProps) {
   const [disableTarget, setDisableTarget] = useState<JobDocument | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<JobDocument | null>(null);
 
   const rows = useMemo<JobsTableRow[]>(
     () =>
@@ -129,6 +137,7 @@ export function JobsTable({
             onEdit={onEdit}
             onEnable={onEnable}
             onRequestDisable={setDisableTarget}
+            onRequestDelete={setDeleteTarget}
           />
         }
       />
@@ -199,6 +208,25 @@ export function JobsTable({
             void onDisable(disableTarget);
           }
           setDisableTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        isOpen={Boolean(deleteTarget)}
+        title="Delete job?"
+        description={
+          deleteTarget
+            ? `Delete job "${deleteTarget.id}" and all of its runs? This cannot be undone.`
+            : ''
+        }
+        primaryButtonLabel="Delete"
+        secondaryButtonLabel="Cancel"
+        variant="destructive"
+        onClose={() => setDeleteTarget(null)}
+        onPrimaryButtonClick={() => {
+          if (deleteTarget) {
+            void onDelete(deleteTarget);
+          }
+          setDeleteTarget(null);
         }}
       />
     </>

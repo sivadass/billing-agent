@@ -90,11 +90,14 @@ export async function updateJob(id: string, patch: Partial<JobDocument>): Promis
 }
 
 export async function disableJob(id: string): Promise<JobDocument> {
+  return updateJob(id, { enabled: false });
+}
+
+export async function deleteJob(id: string): Promise<void> {
   const response = await apiFetch(`/jobs/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
   await throwForNonOk(response);
-  return parseJson<JobDocument>(response);
 }
 
 export async function runJobNow(id: string): Promise<RunJobNowResponse> {

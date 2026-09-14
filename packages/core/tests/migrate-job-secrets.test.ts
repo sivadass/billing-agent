@@ -25,6 +25,14 @@ function createMemoryStore(): BillingStore {
     async upsertJob(job) {
       jobs.set(job.id, job);
     },
+    async deleteJob(id) {
+      jobs.delete(id);
+      for (const [key, secret] of secrets.entries()) {
+        if (secret.jobId === id) {
+          secrets.delete(key);
+        }
+      }
+    },
     async listSecrets(jobId) {
       return [...secrets.values()]
         .filter((secret) => secret.jobId === jobId)
@@ -87,6 +95,7 @@ function createMemoryStore(): BillingStore {
     async getRun() {
       return null;
     },
+    async deleteRun() {},
     async findUserByEmail() {
       return null;
     },

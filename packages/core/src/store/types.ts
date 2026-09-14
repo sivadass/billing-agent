@@ -128,6 +128,7 @@ export interface BillingStore {
   listJobs(options?: { userId?: string }): Promise<JobDocument[]>;
   getJob(id: string): Promise<JobDocument | null>;
   upsertJob(job: JobDocument): Promise<void>;
+  deleteJob(id: string): Promise<void>;
   listSecrets(jobId: string): Promise<SecretDocument[]>;
   upsertSecret(doc: SecretDocument): Promise<void>;
   unsetJobCredentialsEnv(jobId: string): Promise<void>;
@@ -157,6 +158,7 @@ export interface BillingStore {
     limit?: number;
   }): Promise<RunDocument[]>;
   getRun(id: string): Promise<RunDocument | null>;
+  deleteRun(id: string): Promise<void>;
   findUserByEmail(email: string): Promise<UserDocument | null>;
   getUser(id: string): Promise<UserDocument | null>;
   close(): Promise<void>;

@@ -41,3 +41,10 @@ export async function getRun(id: string): Promise<RunDocument> {
   await throwForNonOk(response);
   return parseJson<RunDocument>(response);
 }
+
+export async function deleteRun(id: string): Promise<void> {
+  const response = await apiFetch(`/runs/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  await throwForNonOk(response);
+}

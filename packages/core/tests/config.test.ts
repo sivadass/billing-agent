@@ -29,6 +29,7 @@ function createSecretsStore(
       return null;
     },
     async upsertJob() {},
+    async deleteJob() {},
     async listSecrets() {
       return rows;
     },
@@ -70,6 +71,7 @@ function createSecretsStore(
     async getRun() {
       return null;
     },
+    async deleteRun() {},
     async findUserByEmail() {
       return null;
     },

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { JobsTable } from '../components/jobs-table';
 import { Loader } from '../components/loader';
 import { ApiClientError } from '../lib/api-client';
-import { disableJob, listJobs, runJobNow, updateJob } from '../lib/jobs-api';
+import { deleteJob, disableJob, listJobs, runJobNow, updateJob } from '../lib/jobs-api';
 import type { JobDocument } from '../lib/types';
 import styles from './jobs-page.module.scss';
 
@@ -72,6 +72,18 @@ export function JobsPage() {
     }
   };
 
+  const handleDelete = async (job: JobDocument) => {
+    setActionError(null);
+    try {
+      await deleteJob(job.id);
+      await loadJobs();
+    } catch (err) {
+      setActionError(
+        err instanceof ApiClientError ? err.message : 'Failed to delete job',
+      );
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -100,6 +112,7 @@ export function JobsPage() {
           onEdit={(job) => navigate(`/jobs/${job.id}`)}
           onDisable={handleDisable}
           onEnable={handleEnable}
+          onDelete={handleDelete}
         />
       ) : null}
     </>

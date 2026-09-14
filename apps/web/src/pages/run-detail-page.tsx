@@ -3,6 +3,7 @@ import {
   Badge,
   BreadCrumb,
   Button,
+  ConfirmDialog,
   Container,
   FeedbackState,
   Icon,
@@ -12,7 +13,8 @@ import {
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
-import { getRun } from '../lib/runs-api';
+import { ApiClientError } from '../lib/api-client';
+import { deleteRun, getRun } from '../lib/runs-api';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
 import type { RunDocument } from '../lib/types';
 import styles from './run-detail-page.module.scss';
@@ -98,6 +100,9 @@ export function RunDetailPage() {
   const [run, setRun] = useState<RunDocument | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const loadRun = useCallback(async () => {
     if (!runId) return;
@@ -129,6 +134,23 @@ export function RunDetailPage() {
 
   const billEntries = run?.billSummary ? Object.entries(run.billSummary) : [];
 
+  const handleDelete = async () => {
+    if (!runId) return;
+    setActionError(null);
+    setIsDeleting(true);
+    try {
+      await deleteRun(runId);
+      navigate('/runs');
+    } catch (err) {
+      setActionError(
+        err instanceof ApiClientError ? err.message : 'Failed to delete run',
+      );
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
   return (
     <div className={styles['run-detail']}>
       <BreadCrumb
@@ -148,15 +170,27 @@ export function RunDetailPage() {
               Back to runs
             </Button>
             {run ? (
-              <Button variant="solid" onClick={() => navigate(`/jobs/${run.jobId}`)}>
-                Open job
-              </Button>
+              <>
+                <Button variant="solid" onClick={() => navigate(`/jobs/${run.jobId}`)}>
+                  Open job
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  isDisabled={run.status === 'running' || isDeleting}
+                >
+                  Delete run
+                </Button>
+              </>
             ) : null}
           </Container>
         }
       />
 
       {error ? <Alert variant="error" margin="t-4" message={error} /> : null}
+      {actionError ? (
+        <Alert variant="error" margin="t-4" message={actionError} />
+      ) : null}
 
       {isLoading && !run ? (
         <div className={styles['loading-state']}>
@@ -279,6 +313,23 @@ export function RunDetailPage() {
           </Section>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        title="Delete run?"
+        description={
+          runId
+            ? `Delete run "${runId}"? This cannot be undone.`
+            : ''
+        }
+        primaryButtonLabel="Delete"
+        secondaryButtonLabel="Cancel"
+        variant="destructive"
+        onClose={() => setShowDeleteConfirm(false)}
+        onPrimaryButtonClick={() => {
+          void handleDelete();
+        }}
+      />
     </div>
   );
 }

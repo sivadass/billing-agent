@@ -305,6 +305,26 @@ export async function handleRoute(
     return;
   }
 
+  if (method === 'DELETE' && pathname.startsWith('/runs/')) {
+    const runId = decodeURIComponent(pathname.slice('/runs/'.length));
+    if (runId.includes('/')) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+    const existing = await ctx.store.getRun(runId);
+    if (!existing || existing.userId !== user.userId) {
+      sendJson(res, 404, { error: 'Run not found' });
+      return;
+    }
+    if (existing.status === 'running') {
+      sendJson(res, 409, { error: 'Run still in progress' });
+      return;
+    }
+    await ctx.store.deleteRun(runId);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   if (method === 'GET' && pathname === '/providers') {
     sendJson(res, 200, { providers: listAdapterProviders() });
     return;
@@ -512,10 +532,14 @@ export async function handleRoute(
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
-    const disabled = publicJob({ ...existing, enabled: false }) as JobDocument;
-    await ctx.store.upsertJob(disabled);
+    const recent = await ctx.store.listRuns({ jobId, limit: 20 });
+    if (recent.some((run) => run.status === 'running')) {
+      sendJson(res, 409, { error: 'Job already running' });
+      return;
+    }
+    await ctx.store.deleteJob(jobId);
     await bumpJobsGeneration(ctx.store);
-    sendJson(res, 200, disabled);
+    sendJson(res, 200, { ok: true });
     return;
   }
 

@@ -68,6 +68,20 @@ class MemoryStore implements BillingStore {
     this.jobs.set(job.id, job);
   }
 
+  async deleteJob(id: string): Promise<void> {
+    this.jobs.delete(id);
+    for (const [runId, run] of this.runs.entries()) {
+      if (run.jobId === id) {
+        this.runs.delete(runId);
+      }
+    }
+    for (const [secretKey, secret] of this.secrets.entries()) {
+      if (secret.jobId === id) {
+        this.secrets.delete(secretKey);
+      }
+    }
+  }
+
   async listSecrets(jobId: string): Promise<SecretDocument[]> {
     return [...this.secrets.values()]
       .filter((secret) => secret.jobId === jobId)
@@ -191,6 +205,10 @@ class MemoryStore implements BillingStore {
 
   async getRun(id: string): Promise<RunDocument | null> {
     return this.runs.get(id) ?? null;
+  }
+
+  async deleteRun(id: string): Promise<void> {
+    this.runs.delete(id);
   }
 
   async findUserByEmail(email: string): Promise<UserDocument | null> {
@@ -1203,5 +1221,159 @@ describe('watches api', () => {
     const checks = await store.listPriceChecks({ watchId: 'watch-delete', userId: user.id });
     assert.equal(checks.length, 0);
     assert.equal(store.settings.watchesGeneration, before + 1);
+  });
+});
+
+describe('DELETE /jobs/:id', () => {
+  function enabledJobFor(userId: string): JobDocument {
+    return {
+      id: 'home-eb',
+      userId,
+      provider: 'dummy',
+      enabled: true,
+      schedule: null,
+      credentialsEnv: {},
+      notify: { title: 'Bill' },
+    };
+  }
+
+  it('deletes job, cascades runs and secrets, and bumps jobsGeneration', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(enabledJobFor(user.id));
+    await store.createRun({
+      id: 'run-delete',
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'dummy',
+      status: 'success',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: 1000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+    await store.upsertSecret({
+      id: 'secret-delete',
+      userId: user.id,
+      jobId: 'home-eb',
+      key: 'password',
+      ciphertext: 'cipher',
+      iv: 'iv',
+      tag: 'tag',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const before = store.settings.jobsGeneration;
+    const deleted = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), { ok: true });
+
+    assert.equal(await store.getJob('home-eb'), null);
+    assert.equal((await store.listRuns({ jobId: 'home-eb' })).length, 0);
+    assert.equal((await store.listSecrets('home-eb')).length, 0);
+    assert.equal(store.settings.jobsGeneration, before + 1);
+  });
+
+  it('returns 409 when job has a running run', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob(enabledJobFor(user.id));
+    await store.createRun({
+      id: 'run-active',
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'dummy',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Job already running' });
+    assert.notEqual(await store.getJob('home-eb'), null);
+  });
+});
+
+describe('DELETE /runs/:id', () => {
+  it('deletes a finished run', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.createRun({
+      id: 'run-delete',
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'dummy',
+      status: 'success',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: 1000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+
+    const deleted = await fetch(`http://127.0.0.1:${handle.port}/runs/run-delete`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), { ok: true });
+    assert.equal(await store.getRun('run-delete'), null);
+  });
+
+  it('returns 409 when run is still in progress', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.createRun({
+      id: 'run-active',
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'dummy',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/runs/run-active`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Run still in progress' });
+    assert.notEqual(await store.getRun('run-active'), null);
   });
 });

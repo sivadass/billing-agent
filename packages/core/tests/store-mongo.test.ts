@@ -323,6 +323,122 @@ describe('mongo store', () => {
     assert.equal(checksForLive.length, 1);
   });
 
+  it('deleteJob cascades runs, secrets, and overlays before deleting the job', async () => {
+    const { store } = createStore();
+    const job: JobDocument = {
+      id: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: null,
+      notify: { title: 'TNPDCL Bill' },
+    };
+    const otherJob: JobDocument = {
+      ...job,
+      id: 'other-eb',
+    };
+
+    await store.upsertJob(job);
+    await store.upsertJob(otherJob);
+    await store.createRun({
+      id: 'run-a',
+      jobId: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      status: 'success',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      finishedAt: '2026-08-09T00:01:00.000Z',
+      durationMs: 60_000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+    await store.createRun({
+      id: 'run-b',
+      jobId: 'other-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      status: 'success',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      finishedAt: '2026-08-09T00:01:00.000Z',
+      durationMs: 60_000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+    await store.upsertSecret({
+      id: 'secret-a',
+      userId: 'user-1',
+      jobId: 'home-eb',
+      key: 'password',
+      ciphertext: 'cipher',
+      iv: 'iv',
+      tag: 'tag',
+      createdAt: '2026-08-09T00:00:00.000Z',
+      updatedAt: '2026-08-09T00:00:00.000Z',
+    });
+    await store.recordOverlaySuccess({
+      provider: 'tnpdcl',
+      jobId: 'home-eb',
+      fingerprint: 'fp-a',
+      patch: { loginButton: '#login' },
+    });
+
+    await store.deleteJob('home-eb');
+
+    const jobs = await store.listJobs();
+    assert.deepEqual(jobs.map((item) => item.id), ['other-eb']);
+    assert.equal((await store.listRuns({ jobId: 'home-eb' })).length, 0);
+    assert.equal((await store.listRuns({ jobId: 'other-eb' })).length, 1);
+    assert.equal((await store.listSecrets('home-eb')).length, 0);
+    assert.equal(
+      (
+        await store.listActiveOverlays({
+          provider: 'tnpdcl',
+          jobId: 'home-eb',
+        })
+      ).length,
+      0,
+    );
+  });
+
+  it('deleteRun removes only the targeted run', async () => {
+    const { store } = createStore();
+    const run: RunDocument = {
+      id: 'run-a',
+      jobId: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      status: 'success',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      finishedAt: '2026-08-09T00:01:00.000Z',
+      durationMs: 60_000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    };
+
+    await store.createRun(run);
+    await store.createRun({ ...run, id: 'run-b' });
+
+    await store.deleteRun('run-a');
+
+    assert.equal(await store.getRun('run-a'), null);
+    assert.notEqual(await store.getRun('run-b'), null);
+  });
+
   it('getSettings backfills missing watchesGeneration to zero', async () => {
     const { store, settings } = createStore();
     await settings.insertOne({
