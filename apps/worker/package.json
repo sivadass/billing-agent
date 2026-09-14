@@ -14,6 +14,7 @@
     "@billing-agent/api": "*",
     "@billing-agent/authoring": "*",
     "@billing-agent/core": "*",
+    "@langchain/langgraph-checkpoint-mongodb": "^1.1.0",
     "commander": "^13.1.0",
     "dotenv": "^16.5.0",
     "node-cron": "^3.0.3"

@@ -6,6 +6,7 @@ import {
   ConfigError,
   connectStore,
   connectStoreForMigration,
+  connectStoreWithClient,
   createBrowserLock,
   hashPassword,
   loadConfigFromStore,
@@ -16,9 +17,13 @@ import {
   runJobs,
 } from '@billing-agent/core';
 import {
+  createAuthoringRunMap,
+  createAuthoringRuntime,
+  createConversationEventBus,
+  createMongoCheckpointPort,
   expireStaleAuthoringSessions,
-  handleAuthoringTurn,
 } from '@billing-agent/authoring';
+import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
 import { parseCorsOrigins, startServer } from '@billing-agent/api';
 import { startDaemon } from './scheduler.js';
 import { executeRunJobsCommand } from './run-jobs-command.js';
@@ -100,29 +105,48 @@ program
 program
   .command('daemon')
   .action(withErrorHandling(async () => {
-    const store = await connectStore(requireMongoUri());
+    const { store, client } = await connectStoreWithClient(requireMongoUri());
     const app = await loadConfigFromStore(store);
+    const saver = new MongoDBSaver({
+      client,
+      checkpointCollectionName: 'langgraph_checkpoints',
+    });
+    const checkpoints = createMongoCheckpointPort({
+      saver,
+      deleteThread: (threadId) => saver.deleteThread(threadId),
+    });
+    await expireStaleAuthoringSessions(store, checkpoints);
+    const events = createConversationEventBus();
+    const runs = createAuthoringRunMap();
+    let latestMistral = app.mistral;
+    let latestBrowser = app.browser;
     // One Chromium for the whole daemon: the API reads it to answer 409, the
     // scheduler skips ticks while it is held, the runner acquires it per run,
-    // and slice 3's chat authoring will acquire it per conversation.
+    // and chat authoring acquires it per conversation.
     const lock = createBrowserLock();
-    await expireStaleAuthoringSessions(store);
+    const authoringRuntime = createAuthoringRuntime({
+      store,
+      lock,
+      env: process.env,
+      mistral: () => latestMistral,
+      browser: () => latestBrowser,
+      checkpointer: saver,
+      checkpoints,
+      events,
+      runs,
+    });
     const server = await startServer({
       port: resolveHttpPort(),
       jwtSecret: requireJwtSecret(),
       store,
       corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
       lock,
+      authoring: authoringRuntime,
       onAuthorConversation: async (conversationId: string) => {
         const latest = await loadConfigFromStore(store);
-        await handleAuthoringTurn({
-          store,
-          conversationId,
-          lock,
-          env: process.env,
-          mistral: latest.mistral,
-          browser: latest.browser,
-        });
+        latestMistral = latest.mistral;
+        latestBrowser = latest.browser;
+        await authoringRuntime.invoke(conversationId);
       },
       onRunJob: async (jobId: string) => {
         const latest = await loadConfigFromStore(store);

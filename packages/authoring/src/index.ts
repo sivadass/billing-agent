@@ -16,6 +16,7 @@ export {
   type AuthoringCheckpointPort,
   type AuthoringRuntime,
 } from './runtime.js';
+export { createMongoCheckpointPort } from './mongo-checkpoints.js';
 export {
   CONVERSATION_TOOLS,
   createConversationEventBus,
