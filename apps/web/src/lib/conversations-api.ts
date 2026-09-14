@@ -1,4 +1,16 @@
 import { ApiClientError, apiFetch } from './api-client';
+
+export type ConversationToolName =
+  | 'snapshot'
+  | 'click'
+  | 'fill'
+  | 'wait'
+  | 'extract_candidates';
+
+export type ConversationStreamEvent =
+  | { type: 'tool'; tool: ConversationToolName; conversationId: string; at: string }
+  | { type: 'interrupt'; kind: 'secret' | 'confirm'; conversationId: string; at: string }
+  | { type: 'turn_end'; conversationId: string; at: string };
 import type {
   ConversationDocument,
   ConversationStatus,
@@ -104,6 +116,63 @@ export async function abandonConversation(id: string): Promise<ConversationDocum
   });
   await throwForNonOk(response);
   return parseJson<ConversationDocument>(response);
+}
+
+function parseSseBlock(
+  block: string,
+): { event?: string; data?: string } {
+  let event: string | undefined;
+  let data: string | undefined;
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) {
+      event = line.slice('event:'.length).trim();
+    } else if (line.startsWith('data:')) {
+      data = line.slice('data:'.length).trim();
+    }
+  }
+  return { event, data };
+}
+
+export async function subscribeConversationEvents(
+  conversationId: string,
+  onEvent: (event: ConversationStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(`/conversations/${encodeURIComponent(conversationId)}/events`, {
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new ApiClientError(
+      `Request failed (${response.status})`,
+      'http',
+      response.status,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split('\n\n');
+    buffer = blocks.pop() ?? '';
+    for (const block of blocks) {
+      if (!block.trim() || block.trim().startsWith(':')) continue;
+      const parsed = parseSseBlock(block);
+      if (!parsed.event || !parsed.data) continue;
+      if (
+        parsed.event !== 'tool' &&
+        parsed.event !== 'interrupt' &&
+        parsed.event !== 'turn_end'
+      ) {
+        continue;
+      }
+      onEvent(JSON.parse(parsed.data) as ConversationStreamEvent);
+    }
+  }
 }
 
 export function parseSecretKeysFromMessages(
