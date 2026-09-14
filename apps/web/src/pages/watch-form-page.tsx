@@ -2,6 +2,7 @@ import { Alert, Button, Container, FormControls, PageHeader } from 'cleanplate';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { PageBreadcrumb } from '../components/page-breadcrumb';
 import {
   createWatch,
   getWatch,
@@ -9,6 +10,10 @@ import {
 } from '../lib/watches-api';
 import type { WatchDocument } from '../lib/types';
 import styles from './watch-form-page.module.scss';
+
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
 
 export function WatchFormPage() {
   const navigate = useNavigate();
@@ -90,6 +95,23 @@ export function WatchFormPage() {
 
   return (
     <>
+      <PageBreadcrumb
+        items={
+          isEdit
+            ? [
+                { label: 'Price watches', href: '/watches' },
+                {
+                  label: title.trim() || (watchId ? shortId(watchId) : 'Watch'),
+                  href: `/watches/${watchId}`,
+                },
+                { label: 'Edit' },
+              ]
+            : [
+                { label: 'Price watches', href: '/watches' },
+                { label: 'Create watch' },
+              ]
+        }
+      />
       <PageHeader
         title={pageTitle}
         subtitle="Configure the product URL and watch schedule."

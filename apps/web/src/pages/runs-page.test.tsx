@@ -53,6 +53,7 @@ describe('RunsPage', () => {
 
     expect(await screen.findByText('run-1')).toBeInTheDocument();
     expect(screen.getByText('home-eb')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).not.toBeInTheDocument();
   });
 
   it('does not crash when the list payload omits runs', async () => {

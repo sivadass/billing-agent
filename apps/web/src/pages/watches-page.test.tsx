@@ -73,6 +73,7 @@ describe('WatchesPage', () => {
     );
 
     expect(await screen.findByText('Demo watch')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /check now/i }));
 
     await waitFor(() => {

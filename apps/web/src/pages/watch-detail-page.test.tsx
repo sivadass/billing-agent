@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as watchesApi from '../lib/watches-api';
@@ -55,6 +55,12 @@ describe('WatchDetailPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Demo watch' })).toBeInTheDocument();
+    const crumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(crumb).getByRole('link', { name: 'Price watches' })).toHaveAttribute(
+      'href',
+      '/watches',
+    );
+    expect(within(crumb).getByText('Demo watch')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /check now/i }));
     await waitFor(() => {
       expect(watchesApi.runWatchNow).toHaveBeenCalledWith('watch-1');

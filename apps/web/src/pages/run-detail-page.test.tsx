@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as runsApi from '../lib/runs-api';
@@ -70,6 +70,12 @@ describe('RunDetailPage polling', () => {
     await flushAsync();
     await flushAsync();
     expect(runsApi.getRun).toHaveBeenCalledTimes(1);
+    const crumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(crumb).getByRole('link', { name: 'Runs' })).toHaveAttribute(
+      'href',
+      '/runs',
+    );
+    expect(within(crumb).getByText('r1')).toBeInTheDocument();
     expect(screen.getByText('running')).toBeInTheDocument();
 
     await act(async () => {

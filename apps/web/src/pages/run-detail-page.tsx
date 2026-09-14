@@ -1,7 +1,6 @@
 import {
   Alert,
   Badge,
-  BreadCrumb,
   Button,
   ConfirmDialog,
   Container,
@@ -13,6 +12,7 @@ import {
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { PageBreadcrumb } from '../components/page-breadcrumb';
 import { ApiClientError } from '../lib/api-client';
 import { deleteRun, getRun } from '../lib/runs-api';
 import { humanizeTimestamp } from '../lib/timestamp-humanize';
@@ -153,8 +153,7 @@ export function RunDetailPage() {
 
   return (
     <div className={styles['run-detail']}>
-      <BreadCrumb
-        margin="b-2"
+      <PageBreadcrumb
         items={[
           { label: 'Runs', href: '/runs' },
           { label: runId ? shortId(runId) : 'Detail' },
@@ -165,25 +164,20 @@ export function RunDetailPage() {
         title="Run detail"
         subtitle={runId ? `ID ${runId}` : 'Live run state and billing details.'}
         primaryCta={
-          <Container display="flex" gap="2" padding="0" margin="0">
-            <Button variant="outline" onClick={() => navigate('/runs')}>
-              Back to runs
-            </Button>
-            {run ? (
-              <>
-                <Button variant="solid" onClick={() => navigate(`/jobs/${run.jobId}`)}>
-                  Open job
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowDeleteConfirm(true)}
-                  isDisabled={run.status === 'running' || isDeleting}
-                >
-                  Delete run
-                </Button>
-              </>
-            ) : null}
-          </Container>
+          run ? (
+            <Container display="flex" gap="2" padding="0" margin="0">
+              <Button variant="solid" onClick={() => navigate(`/jobs/${run.jobId}`)}>
+                Open job
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowDeleteConfirm(true)}
+                isDisabled={run.status === 'running' || isDeleting}
+              >
+                Delete run
+              </Button>
+            </Container>
+          ) : undefined
         }
       />
 

@@ -1,7 +1,6 @@
 import {
   Alert,
   Badge,
-  BreadCrumb,
   Button,
   Container,
   Dropdown,
@@ -14,6 +13,7 @@ import {
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { PageBreadcrumb } from '../components/page-breadcrumb';
 import { WatchChecksTable } from '../components/watch-checks-table';
 import { ApiClientError } from '../lib/api-client';
 import { humanizeCron } from '../lib/cron-humanize';
@@ -127,8 +127,7 @@ export function WatchDetailPage() {
 
   return (
     <div className={styles['watch-detail']}>
-      <BreadCrumb
-        margin="b-2"
+      <PageBreadcrumb
         items={[
           { label: 'Price watches', href: '/watches' },
           { label: watch ? watch.title ?? shortId(watch.id) : 'Detail' },
@@ -167,13 +166,10 @@ export function WatchDetailPage() {
                   direction="vertical"
                   size="small"
                   items={[
-                    { label: 'Back to watches', value: 'back', icon: 'arrow_back' },
                     { label: 'Edit watch', value: 'edit', icon: 'edit' },
                   ]}
                   onMenuClick={(item) => {
-                    if (item.value === 'back') {
-                      navigate('/watches');
-                    } else if (item.value === 'edit' && watch) {
+                    if (item.value === 'edit' && watch) {
                       navigate(`/watches/${watch.id}/edit`);
                     }
                   }}

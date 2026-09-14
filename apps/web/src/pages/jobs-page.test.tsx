@@ -59,6 +59,7 @@ describe('JobsPage', () => {
     );
 
     expect(await screen.findByText('Every day at 9:00 AM')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /run/i }));
 
     await waitFor(() => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as jobsApi from '../lib/jobs-api';
@@ -89,6 +89,12 @@ describe('JobFormPage', () => {
       expect(screen.getByLabelText(/job id/i)).toBeInTheDocument();
     });
 
+    const crumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(crumb).getByRole('link', { name: 'Jobs' })).toHaveAttribute(
+      'href',
+      '/jobs',
+    );
+    expect(within(crumb).getByText('Create job')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Job configuration' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Provider credentials' })).toBeInTheDocument();
@@ -144,6 +150,12 @@ describe('JobFormPage', () => {
       expect(screen.getByLabelText(/^username$/i)).toBeInTheDocument();
     });
 
+    const crumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(crumb).getByRole('link', { name: 'Jobs' })).toHaveAttribute(
+      'href',
+      '/jobs',
+    );
+    expect(within(crumb).getByText('home-eb')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save job/i })).toBeInTheDocument();
     expect(screen.getByText('Runs only when triggered manually')).toBeInTheDocument();
 

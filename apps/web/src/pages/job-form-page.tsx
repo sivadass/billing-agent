@@ -8,6 +8,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader } from '../components/loader';
+import { PageBreadcrumb } from '../components/page-breadcrumb';
 import { ScheduleFields } from '../components/schedule-fields';
 import {
   createJob,
@@ -175,6 +176,12 @@ export function JobFormPage() {
 
   return (
     <div className={styles['job-form']}>
+      <PageBreadcrumb
+        items={[
+          { label: 'Jobs', href: '/jobs' },
+          { label: isEdit ? (jobId ?? 'Edit job') : 'Create job' },
+        ]}
+      />
       <PageHeader
         className={styles['page-header']}
         title={title}
