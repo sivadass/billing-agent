@@ -92,7 +92,7 @@ export function RunsTable({
 }: RunsTableProps) {
   const [deleteTarget, setDeleteTarget] = useState<RunDocument | null>(null);
 
-  const rows: RunsTableRow[] = runs.map((run) => {
+  const rows: RunsTableRow[] = (runs ?? []).map((run) => {
     const startedAtLabel = humanizeTimestamp(run.startedAt);
     const durationLabel = formatDuration(run.durationMs);
     return {

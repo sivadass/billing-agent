@@ -26,6 +26,22 @@ async function throwForNonOk(response: Response): Promise<void> {
   throw new ApiClientError(message, 'http', response.status);
 }
 
+function normalizeListRunsPayload(body: unknown): ListRunsResult {
+  if (Array.isArray(body)) {
+    return { runs: body as RunDocument[], total: body.length };
+  }
+  if (body && typeof body === 'object') {
+    const payload = body as { runs?: unknown; total?: unknown };
+    const runs = Array.isArray(payload.runs) ? (payload.runs as RunDocument[]) : [];
+    const total =
+      typeof payload.total === 'number' && Number.isFinite(payload.total)
+        ? payload.total
+        : runs.length;
+    return { runs, total };
+  }
+  return { runs: [], total: 0 };
+}
+
 export async function listRuns(options?: {
   jobId?: string;
   status?: RunDocument['status'];
@@ -49,7 +65,7 @@ export async function listRuns(options?: {
   const path = query ? `/runs?${query}` : '/runs';
   const response = await apiFetch(path);
   await throwForNonOk(response);
-  return parseJson<ListRunsResult>(response);
+  return normalizeListRunsPayload(await parseJson<unknown>(response));
 }
 
 export async function getRun(id: string): Promise<RunDocument> {

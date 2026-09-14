@@ -102,6 +102,42 @@ describe('jobs and runs API helpers', () => {
     );
   });
 
+  it('normalizes a legacy array payload from GET /runs', async () => {
+    const runs: RunDocument[] = [
+      {
+        id: 'run-1',
+        jobId: 'home-eb',
+        provider: 'dummy',
+        status: 'success',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 100,
+        errorCode: null,
+        errorMessage: null,
+        screenshotPath: null,
+        recoveryAttempted: false,
+        recoverySucceeded: false,
+        overlayActivated: false,
+        billSummary: null,
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(runs), { status: 200 })),
+    );
+
+    await expect(listRuns()).resolves.toEqual({ runs, total: 1 });
+  });
+
+  it('treats a paginated payload missing runs as an empty list', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ total: 0 }), { status: 200 })),
+    );
+
+    await expect(listRuns()).resolves.toEqual({ runs: [], total: 0 });
+  });
+
   it('throws ApiClientError type when run lookup fails', async () => {
     vi.stubGlobal(
       'fetch',

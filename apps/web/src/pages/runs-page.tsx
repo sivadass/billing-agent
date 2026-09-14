@@ -53,8 +53,8 @@ export function RunsPage() {
           ? { status: selectedStatus as RunDocument['status'] }
           : {}),
       });
-      setRuns(result.runs);
-      setTotalItems(result.total);
+      setRuns(Array.isArray(result.runs) ? result.runs : []);
+      setTotalItems(typeof result.total === 'number' ? result.total : 0);
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : 'Failed to load runs',
