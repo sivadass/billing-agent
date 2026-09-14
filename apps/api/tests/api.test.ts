@@ -187,7 +187,9 @@ class MemoryStore implements BillingStore {
   async listRuns(options?: {
     userId?: string;
     jobId?: string;
+    status?: RunDocument['status'];
     limit?: number;
+    offset?: number;
   }): Promise<RunDocument[]> {
     let runs = [...this.runs.values()];
     if (options?.userId) {
@@ -196,11 +198,36 @@ class MemoryStore implements BillingStore {
     if (options?.jobId) {
       runs = runs.filter((run) => run.jobId === options.jobId);
     }
+    if (options?.status) {
+      runs = runs.filter((run) => run.status === options.status);
+    }
     runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    const offset = options?.offset ?? 0;
     if (options?.limit && options.limit > 0) {
-      return runs.slice(0, options.limit);
+      return runs.slice(offset, offset + options.limit);
+    }
+    if (offset > 0) {
+      return runs.slice(offset);
     }
     return runs;
+  }
+
+  async countRuns(options?: {
+    userId?: string;
+    jobId?: string;
+    status?: RunDocument['status'];
+  }): Promise<number> {
+    let runs = [...this.runs.values()];
+    if (options?.userId) {
+      runs = runs.filter((run) => run.userId === options.userId);
+    }
+    if (options?.jobId) {
+      runs = runs.filter((run) => run.jobId === options.jobId);
+    }
+    if (options?.status) {
+      runs = runs.filter((run) => run.status === options.status);
+    }
+    return runs.length;
   }
 
   async getRun(id: string): Promise<RunDocument | null> {
@@ -1313,6 +1340,99 @@ describe('DELETE /jobs/:id', () => {
     assert.equal(response.status, 409);
     assert.deepEqual(await response.json(), { error: 'Job already running' });
     assert.notEqual(await store.getJob('home-eb'), null);
+  });
+});
+
+describe('GET /runs', () => {
+  it('returns paginated runs with total count and defaults limit to 10', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const baseRun = {
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'dummy',
+      status: 'success' as const,
+      finishedAt: new Date().toISOString(),
+      durationMs: 1000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    };
+
+    for (let index = 0; index < 12; index += 1) {
+      await store.createRun({
+        ...baseRun,
+        id: `run-${index}`,
+        startedAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      });
+    }
+
+    const firstPage = await fetch(`http://127.0.0.1:${handle.port}/runs`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(firstPage.status, 200);
+    const firstBody = (await firstPage.json()) as {
+      runs: RunDocument[];
+      total: number;
+    };
+    assert.equal(firstBody.total, 12);
+    assert.equal(firstBody.runs.length, 10);
+    assert.equal(firstBody.runs[0]?.id, 'run-11');
+
+    const secondPage = await fetch(`http://127.0.0.1:${handle.port}/runs?offset=10&limit=10`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const secondBody = (await secondPage.json()) as {
+      runs: RunDocument[];
+      total: number;
+    };
+    assert.equal(secondBody.total, 12);
+    assert.equal(secondBody.runs.length, 2);
+    assert.equal(secondBody.runs[0]?.id, 'run-1');
+  });
+
+  it('filters runs by status before paginating', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const baseRun = {
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'dummy',
+      finishedAt: new Date().toISOString(),
+      durationMs: 1000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    };
+
+    await store.createRun({
+      ...baseRun,
+      id: 'run-success',
+      status: 'success',
+      startedAt: '2026-01-02T00:00:00.000Z',
+    });
+    await store.createRun({
+      ...baseRun,
+      id: 'run-failed',
+      status: 'failed',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/runs?status=success&limit=10`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { runs: RunDocument[]; total: number };
+    assert.equal(body.total, 1);
+    assert.deepEqual(body.runs.map((run) => run.id), ['run-success']);
   });
 });
 

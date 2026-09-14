@@ -88,6 +88,10 @@ class MemoryWatchStore {
     return [];
   }
 
+  async countRuns() {
+    return 0;
+  }
+
   async getRun() {
     return null;
   }

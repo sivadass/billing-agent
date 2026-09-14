@@ -92,6 +92,9 @@ function createMemoryStore(): BillingStore {
     async listRuns() {
       return [];
     },
+    async countRuns() {
+      return 0;
+    },
     async getRun() {
       return null;
     },

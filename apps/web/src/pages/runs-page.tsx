@@ -1,5 +1,5 @@
 import { Alert, FormControls, PageHeader } from 'cleanplate';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader } from '../components/loader';
 import { RunsTable } from '../components/runs-table';
@@ -18,12 +18,17 @@ const STATUS_OPTIONS: SelectOption[] = [
   { label: 'Failed', value: 'failed' },
 ];
 
+const DEFAULT_ROWS_PER_PAGE = 10;
+
 export function RunsPage() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<JobDocument[]>([]);
   const [runs, setRuns] = useState<RunDocument[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
   const [selectedJobId, setSelectedJobId] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(DEFAULT_ROWS_PER_PAGE);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -41,10 +46,15 @@ export function RunsPage() {
     setError(null);
     try {
       const result = await listRuns({
-        limit: 100,
+        limit: rowsPerPage,
+        offset: (currentPage - 1) * rowsPerPage,
         ...(selectedJobId !== 'all' ? { jobId: selectedJobId } : {}),
+        ...(selectedStatus !== 'all'
+          ? { status: selectedStatus as RunDocument['status'] }
+          : {}),
       });
-      setRuns(result);
+      setRuns(result.runs);
+      setTotalItems(result.total);
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : 'Failed to load runs',
@@ -52,16 +62,11 @@ export function RunsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedJobId]);
+  }, [currentPage, rowsPerPage, selectedJobId, selectedStatus]);
 
   useEffect(() => {
     void loadRuns();
   }, [loadRuns]);
-
-  const filteredRuns = useMemo(() => {
-    if (selectedStatus === 'all') return runs;
-    return runs.filter((run) => run.status === selectedStatus);
-  }, [runs, selectedStatus]);
 
   const jobOptions: SelectOption[] = [
     { label: 'All jobs', value: 'all' },
@@ -77,6 +82,12 @@ export function RunsPage() {
     setActionError(null);
     try {
       await deleteRun(run.id);
+      const nextTotal = totalItems - 1;
+      const maxPage = Math.max(1, Math.ceil(nextTotal / rowsPerPage));
+      if (currentPage > maxPage) {
+        setCurrentPage(maxPage);
+        return;
+      }
       await loadRuns();
     } catch (err) {
       setActionError(
@@ -100,6 +111,7 @@ export function RunsPage() {
             onChange={(selected) => {
               if (selected && !Array.isArray(selected)) {
                 setSelectedJobId(String(selected.value));
+                setCurrentPage(1);
               }
             }}
             isFluid
@@ -113,6 +125,7 @@ export function RunsPage() {
             onChange={(selected) => {
               if (selected && !Array.isArray(selected)) {
                 setSelectedStatus(String(selected.value));
+                setCurrentPage(1);
               }
             }}
             isFluid
@@ -130,7 +143,15 @@ export function RunsPage() {
       ) : null}
       {!isLoading && !error ? (
         <RunsTable
-          runs={filteredRuns}
+          runs={runs}
+          totalItems={totalItems}
+          currentPage={currentPage}
+          rowsPerPage={rowsPerPage}
+          onPageChange={(page) => setCurrentPage(page)}
+          onRowsPerPageChange={(nextRowsPerPage) => {
+            setRowsPerPage(nextRowsPerPage);
+            setCurrentPage(1);
+          }}
           onSelectRun={(run) => navigate(`/runs/${run.id}`)}
           onDelete={handleDelete}
         />

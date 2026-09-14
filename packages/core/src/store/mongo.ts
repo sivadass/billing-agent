@@ -276,13 +276,29 @@ export function createBillingStoreFromCollections(
         .find({
           ...(options?.userId ? { userId: options.userId } : {}),
           ...(options?.jobId ? { jobId: options.jobId } : {}),
+          ...(options?.status ? { status: options.status } : {}),
         })
         .toArray();
       const sorted = runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      const offset = options?.offset ?? 0;
       if (options?.limit && options.limit > 0) {
-        return sorted.slice(0, options.limit);
+        return sorted.slice(offset, offset + options.limit);
+      }
+      if (offset > 0) {
+        return sorted.slice(offset);
       }
       return sorted;
+    },
+
+    async countRuns(options) {
+      const runs = await collections.runs
+        .find({
+          ...(options?.userId ? { userId: options.userId } : {}),
+          ...(options?.jobId ? { jobId: options.jobId } : {}),
+          ...(options?.status ? { status: options.status } : {}),
+        })
+        .toArray();
+      return runs.length;
     },
 
     async getRun(id) {

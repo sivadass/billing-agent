@@ -213,6 +213,55 @@ describe('mongo store', () => {
     assert.deepEqual(user1Jobs, [jobForUser1]);
   });
 
+  it('listRuns supports offset, limit, status, and countRuns', async () => {
+    const { store } = createStore();
+    const baseRun: RunDocument = {
+      id: 'run-1',
+      jobId: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      status: 'success',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      finishedAt: '2026-08-09T00:01:00.000Z',
+      durationMs: 60_000,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    };
+
+    await store.createRun(baseRun);
+    await store.createRun({
+      ...baseRun,
+      id: 'run-2',
+      status: 'failed',
+      startedAt: '2026-08-09T00:05:00.000Z',
+    });
+    await store.createRun({
+      ...baseRun,
+      id: 'run-3',
+      status: 'success',
+      startedAt: '2026-08-10T00:00:00.000Z',
+    });
+
+    const page = await store.listRuns({
+      userId: 'user-1',
+      status: 'success',
+      limit: 1,
+      offset: 1,
+    });
+    assert.deepEqual(page.map((run) => run.id), ['run-1']);
+
+    const total = await store.countRuns({
+      userId: 'user-1',
+      status: 'success',
+    });
+    assert.equal(total, 2);
+  });
+
   it('listRuns filters by userId when provided', async () => {
     const { store } = createStore();
     const runForUser1: RunDocument = {

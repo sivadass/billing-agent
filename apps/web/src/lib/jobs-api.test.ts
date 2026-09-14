@@ -65,31 +65,41 @@ describe('jobs and runs API helpers', () => {
     );
   });
 
-  it('lists runs with job and limit filters', async () => {
-    const runs: RunDocument[] = [
-      {
-        id: 'run-1',
-        jobId: 'home-eb',
-        provider: 'dummy',
-        status: 'success',
-        startedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-        durationMs: 100,
-        errorCode: null,
-        errorMessage: null,
-        screenshotPath: null,
-        recoveryAttempted: false,
-        recoverySucceeded: false,
-        overlayActivated: false,
-        billSummary: null,
-      },
-    ];
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(runs), { status: 200 }));
+  it('lists runs with job, status, limit, and offset filters', async () => {
+    const payload = {
+      runs: [
+        {
+          id: 'run-1',
+          jobId: 'home-eb',
+          provider: 'dummy',
+          status: 'success',
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          durationMs: 100,
+          errorCode: null,
+          errorMessage: null,
+          screenshotPath: null,
+          recoveryAttempted: false,
+          recoverySucceeded: false,
+          overlayActivated: false,
+          billSummary: null,
+        },
+      ] satisfies RunDocument[],
+      total: 42,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await listRuns({ jobId: 'home-eb', limit: 10 });
-    expect(result).toEqual(runs);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8080/runs?jobId=home-eb&limit=10');
+    const result = await listRuns({
+      jobId: 'home-eb',
+      status: 'success',
+      limit: 10,
+      offset: 20,
+    });
+    expect(result).toEqual(payload);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:8080/runs?jobId=home-eb&status=success&limit=10&offset=20',
+    );
   });
 
   it('throws ApiClientError type when run lookup fails', async () => {

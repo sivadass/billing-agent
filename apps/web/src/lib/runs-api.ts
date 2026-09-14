@@ -1,6 +1,11 @@
 import { ApiClientError, apiFetch } from './api-client';
 import type { RunDocument } from './types';
 
+export type ListRunsResult = {
+  runs: RunDocument[];
+  total: number;
+};
+
 async function parseJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
@@ -21,19 +26,30 @@ async function throwForNonOk(response: Response): Promise<void> {
   throw new ApiClientError(message, 'http', response.status);
 }
 
-export async function listRuns(options?: { jobId?: string; limit?: number }): Promise<RunDocument[]> {
+export async function listRuns(options?: {
+  jobId?: string;
+  status?: RunDocument['status'];
+  limit?: number;
+  offset?: number;
+}): Promise<ListRunsResult> {
   const params = new URLSearchParams();
   if (options?.jobId) {
     params.set('jobId', options.jobId);
   }
+  if (options?.status) {
+    params.set('status', options.status);
+  }
   if (typeof options?.limit === 'number') {
     params.set('limit', String(options.limit));
+  }
+  if (typeof options?.offset === 'number') {
+    params.set('offset', String(options.offset));
   }
   const query = params.toString();
   const path = query ? `/runs?${query}` : '/runs';
   const response = await apiFetch(path);
   await throwForNonOk(response);
-  return parseJson<RunDocument[]>(response);
+  return parseJson<ListRunsResult>(response);
 }
 
 export async function getRun(id: string): Promise<RunDocument> {

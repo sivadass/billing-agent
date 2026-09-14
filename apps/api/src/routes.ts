@@ -4,6 +4,7 @@ import type {
   BillingStore,
   JobDocument,
   PriceSource,
+  RunDocument,
   SettingsDocument,
   WatchDocument,
 } from '@billing-agent/core';
@@ -283,14 +284,33 @@ export async function handleRoute(
 
   if (method === 'GET' && pathname === '/runs') {
     const jobId = url.searchParams.get('jobId') ?? undefined;
+    const statusParam = url.searchParams.get('status');
+    const status: RunDocument['status'] | undefined =
+      statusParam === 'running' ||
+      statusParam === 'success' ||
+      statusParam === 'failed'
+        ? statusParam
+        : undefined;
     const limitText = url.searchParams.get('limit');
-    const limit = limitText ? Number(limitText) : undefined;
-    const runs = await ctx.store.listRuns({
+    const offsetText = url.searchParams.get('offset');
+    const parsedLimit = limitText ? Number(limitText) : 10;
+    const parsedOffset = offsetText ? Number(offsetText) : 0;
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
+    const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+    const listOptions = {
       userId: user.userId,
       jobId,
-      limit: Number.isFinite(limit) ? limit : undefined,
+      status,
+      limit,
+      offset,
+    };
+    const runs = await ctx.store.listRuns(listOptions);
+    const total = await ctx.store.countRuns({
+      userId: user.userId,
+      jobId,
+      status,
     });
-    sendJson(res, 200, runs);
+    sendJson(res, 200, { runs, total });
     return;
   }
 

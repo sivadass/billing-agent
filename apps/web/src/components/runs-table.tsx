@@ -15,6 +15,11 @@ import styles from './runs-table.module.scss';
 
 type RunsTableProps = {
   runs: RunDocument[];
+  totalItems: number;
+  currentPage: number;
+  rowsPerPage: number;
+  onPageChange: (page: number) => void;
+  onRowsPerPageChange: (rowsPerPage: number) => void;
   onSelectRun: (run: RunDocument) => void;
   onDelete: (run: RunDocument) => Promise<void> | void;
 };
@@ -75,7 +80,16 @@ function RunRowMoreMenu({
   );
 }
 
-export function RunsTable({ runs, onSelectRun, onDelete }: RunsTableProps) {
+export function RunsTable({
+  runs,
+  totalItems,
+  currentPage,
+  rowsPerPage,
+  onPageChange,
+  onRowsPerPageChange,
+  onSelectRun,
+  onDelete,
+}: RunsTableProps) {
   const [deleteTarget, setDeleteTarget] = useState<RunDocument | null>(null);
 
   const rows: RunsTableRow[] = runs.map((run) => {
@@ -162,6 +176,12 @@ export function RunsTable({ runs, onSelectRun, onDelete }: RunsTableProps) {
           },
         ]}
         data={rows}
+        totalItems={totalItems}
+        totalLabel="Runs"
+        currentPage={currentPage}
+        rowsPerPage={rowsPerPage}
+        onPageChange={onPageChange}
+        onRowsPerPageChange={onRowsPerPageChange}
         onRowClick={(raw) => onSelectRun((raw as RunsTableRow).run)}
         mobileColumns={{
           title: 'id',

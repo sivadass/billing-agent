@@ -155,8 +155,15 @@ export interface BillingStore {
   listRuns(options?: {
     userId?: string;
     jobId?: string;
+    status?: RunDocument['status'];
     limit?: number;
+    offset?: number;
   }): Promise<RunDocument[]>;
+  countRuns(options?: {
+    userId?: string;
+    jobId?: string;
+    status?: RunDocument['status'];
+  }): Promise<number>;
   getRun(id: string): Promise<RunDocument | null>;
   deleteRun(id: string): Promise<void>;
   findUserByEmail(email: string): Promise<UserDocument | null>;

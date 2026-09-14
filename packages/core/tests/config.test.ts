@@ -68,6 +68,9 @@ function createSecretsStore(
     async listRuns() {
       return [];
     },
+    async countRuns() {
+      return 0;
+    },
     async getRun() {
       return null;
     },

@@ -181,6 +181,7 @@ describe('runJob', () => {
         runUpdates.push(update);
       },
       listRuns: async () => [],
+      countRuns: async () => 0,
       getRun: async () => null,
       deleteRun: async () => {},
       findUserByEmail: async () => null,
@@ -298,6 +299,7 @@ describe('runJob', () => {
       createRun: async () => {},
       finishRun: async () => {},
       listRuns: async () => [],
+      countRuns: async () => 0,
       getRun: async () => null,
       deleteRun: async () => {},
       findUserByEmail: async () => null,
@@ -587,6 +589,7 @@ describe('runJobs', () => {
       },
       finishRun: async () => {},
       listRuns: async () => [],
+      countRuns: async () => 0,
       getRun: async () => null,
       deleteRun: async () => {},
       findUserByEmail: async () => null,
