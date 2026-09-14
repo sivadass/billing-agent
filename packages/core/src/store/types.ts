@@ -7,8 +7,20 @@ export type JobDocument = {
   provider: string;
   enabled: boolean;
   schedule: string | null;
-  credentialsEnv: Record<string, string>;
+  credentialsEnv?: Record<string, string>;
   notify: { title: string };
+};
+
+export type SecretDocument = {
+  id: string;
+  userId: string;
+  jobId: string;
+  key: string;
+  ciphertext: string;
+  iv: string;
+  tag: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type UserDocument = {
@@ -116,6 +128,9 @@ export interface BillingStore {
   listJobs(options?: { userId?: string }): Promise<JobDocument[]>;
   getJob(id: string): Promise<JobDocument | null>;
   upsertJob(job: JobDocument): Promise<void>;
+  listSecrets(jobId: string): Promise<SecretDocument[]>;
+  upsertSecret(doc: SecretDocument): Promise<void>;
+  unsetJobCredentialsEnv(jobId: string): Promise<void>;
   upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void>;
   listWatches(options?: { userId?: string }): Promise<WatchDocument[]>;
   getWatch(id: string): Promise<WatchDocument | null>;

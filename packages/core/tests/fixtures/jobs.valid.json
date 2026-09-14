@@ -32,7 +32,6 @@
       "provider": "dummy",
       "enabled": true,
       "schedule": null,
-      "credentials": {},
       "notify": { "title": "Dummy Bill" }
     }
   ]

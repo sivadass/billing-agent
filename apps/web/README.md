@@ -20,7 +20,7 @@ Notes:
 - Schedules are shown in humanized form in tables, but edited as raw cron in forms.
 - Empty schedule means manual-only (`null` in API payloads).
 - Job disable is soft-disable only (`DELETE /jobs/:id` sets `enabled: false`).
-- Credentials are env **names** only (`credentialsEnv`), never secret values.
+- Job credentials are write-only secrets per job; the UI never displays stored values.
 - `Run` calls `POST /jobs/:id/run` and navigates to the created run detail.
 - The run trigger requires the worker daemon API (`billing-agent daemon`) with `onRunJob` wiring.
 

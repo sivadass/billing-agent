@@ -1,19 +1,23 @@
 import { Alert, Button, Container, FormControls, PageHeader } from 'cleanplate';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import {
-  type CredentialEnvRow,
-  CredentialsEnvEditor,
-} from '../components/credentials-env-editor';
 import { Loader } from '../components/loader';
-import { createJob, getJob, updateJob } from '../lib/jobs-api';
+import {
+  createJob,
+  getJob,
+  getJobSecrets,
+  listProviders,
+  updateJob,
+  updateJobSecrets,
+} from '../lib/jobs-api';
 import type { JobDocument } from '../lib/types';
 import styles from './job-form-page.module.scss';
 
-const PROVIDER_OPTIONS = [
-  { label: 'tnpdcl', value: 'tnpdcl' },
-  { label: 'dummy', value: 'dummy' },
-];
+type ProviderInfo = { id: string; credentialKeys: string[] };
+
+function labelForCredentialKey(key: string): string {
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
 
 export function JobFormPage() {
   const navigate = useNavigate();
@@ -24,28 +28,48 @@ export function JobFormPage() {
   const [enabled, setEnabled] = useState(true);
   const [schedule, setSchedule] = useState('');
   const [notifyTitle, setNotifyTitle] = useState('');
-  const [credentialsRows, setCredentialsRows] = useState<CredentialEnvRow[]>([]);
-  const [isLoading, setIsLoading] = useState(isEdit);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  const [secretSet, setSecretSet] = useState<Record<string, boolean>>({});
+  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!isEdit || !jobId) return;
     setIsLoading(true);
-    void getJob(jobId)
-      .then((job) => {
-        setId(job.id);
-        setProvider(job.provider);
-        setEnabled(job.enabled);
-        setSchedule(job.schedule ?? '');
-        setNotifyTitle(job.notify.title);
-        setCredentialsRows(
-          Object.entries(job.credentialsEnv).map(([key, envName]) => ({
-            key,
-            envName,
-          })),
-        );
+    setError(null);
+
+    const load = isEdit && jobId
+      ? Promise.all([listProviders(), getJob(jobId), getJobSecrets(jobId)])
+      : listProviders().then((result) => [result] as const);
+
+    void load
+      .then((result) => {
+        if (isEdit && jobId) {
+          const [providerResult, job, secrets] = result as [
+            { providers: ProviderInfo[] },
+            JobDocument,
+            { keys: Array<{ key: string; set: boolean }> },
+          ];
+          setProviders(providerResult.providers);
+          setId(job.id);
+          setProvider(job.provider);
+          setEnabled(job.enabled);
+          setSchedule(job.schedule ?? '');
+          setNotifyTitle(job.notify.title);
+          setSecretValues({});
+          setSecretSet(
+            Object.fromEntries(secrets.keys.map(({ key, set }) => [key, set])),
+          );
+          return;
+        }
+
+        const providerResult = result[0] as { providers: ProviderInfo[] };
+        setProviders(providerResult.providers);
+        setProvider(providerResult.providers[0]?.id ?? 'tnpdcl');
+        setSecretValues({});
+        setSecretSet({});
       })
       .catch((loadError) => {
         setError(
@@ -55,21 +79,19 @@ export function JobFormPage() {
       .finally(() => setIsLoading(false));
   }, [isEdit, jobId]);
 
-  const providerValue = useMemo(
-    () => PROVIDER_OPTIONS.find((item) => item.value === provider) ?? null,
-    [provider],
+  const credentialKeys = useMemo(() => {
+    return providers.find((item) => item.id === provider)?.credentialKeys ?? [];
+  }, [providers, provider]);
+
+  const providerOptions = useMemo(
+    () => providers.map((item) => ({ label: item.id, value: item.id })),
+    [providers],
   );
 
-  const buildCredentialsEnv = (): Record<string, string> => {
-    const entries = credentialsRows
-      .map((row) => ({
-        key: row.key.trim(),
-        envName: row.envName.trim(),
-      }))
-      .filter((row) => row.key && row.envName)
-      .map((row) => [row.key, row.envName] as const);
-    return Object.fromEntries(entries);
-  };
+  const providerValue = useMemo(
+    () => providerOptions.find((item) => item.value === provider) ?? null,
+    [provider, providerOptions],
+  );
 
   const onSubmit = async () => {
     const nextErrors: Record<string, string> = {};
@@ -84,25 +106,45 @@ export function JobFormPage() {
     if (!notifyTitle.trim()) {
       nextErrors.notifyTitle = 'Notify title is required';
     }
+
+    if (!isEdit) {
+      for (const key of credentialKeys) {
+        if (!secretValues[key]?.trim()) {
+          nextErrors[`secret-${key}`] = `${labelForCredentialKey(key)} is required`;
+        }
+      }
+    }
+
     setFieldErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    const payload: JobDocument = {
+    const jobPayload: JobDocument = {
       id: jobIdValue,
       provider,
       enabled,
       schedule: schedule.trim() ? schedule.trim() : null,
-      credentialsEnv: buildCredentialsEnv(),
       notify: { title: notifyTitle.trim() },
     };
+
+    const secretPatch = Object.fromEntries(
+      Object.entries(secretValues).filter(([, value]) => value.trim()),
+    );
 
     setIsSaving(true);
     setError(null);
     try {
       if (isEdit && jobId) {
-        await updateJob(jobId, payload);
+        await updateJob(jobId, jobPayload);
+        if (Object.keys(secretPatch).length > 0) {
+          await updateJobSecrets(jobId, secretPatch);
+        }
       } else {
-        await createJob(payload);
+        await createJob({
+          ...jobPayload,
+          secrets: Object.fromEntries(
+            credentialKeys.map((key) => [key, secretValues[key]?.trim() ?? '']),
+          ),
+        });
       }
       navigate('/jobs');
     } catch (saveError) {
@@ -136,13 +178,17 @@ export function JobFormPage() {
           />
           <FormControls.Select
             label="Provider"
-            options={PROVIDER_OPTIONS}
+            options={providerOptions}
             value={providerValue}
             onChange={(selected) => {
               if (selected && !Array.isArray(selected)) {
                 setProvider(String(selected.value));
+                if (!isEdit) {
+                  setSecretValues({});
+                }
               }
             }}
+            isDisabled={isEdit}
             error={fieldErrors.provider}
             isFluid
             margin="t-3"
@@ -169,10 +215,26 @@ export function JobFormPage() {
             error={fieldErrors.notifyTitle}
             margin="t-3"
           />
-          <CredentialsEnvEditor
-            rows={credentialsRows}
-            onChange={setCredentialsRows}
-          />
+          {credentialKeys.map((key) => (
+            <FormControls.Input
+              key={key}
+              label={labelForCredentialKey(key)}
+              type={key === 'password' ? 'password' : 'text'}
+              value={secretValues[key] ?? ''}
+              onChange={(event) =>
+                setSecretValues((current) => ({
+                  ...current,
+                  [key]: event.target.value,
+                }))
+              }
+              placeholder={
+                isEdit && secretSet[key] ? 'Leave blank to keep (currently set)' : undefined
+              }
+              isFluid
+              error={fieldErrors[`secret-${key}`]}
+              margin="t-3"
+            />
+          ))}
           <Container display="flex" gap="2" margin="t-4">
             <Button variant="solid" onClick={() => void onSubmit()} isDisabled={isSaving}>
               Save job

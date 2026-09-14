@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
   BillingStore,
@@ -6,7 +7,15 @@ import type {
   SettingsDocument,
   WatchDocument,
 } from '@billing-agent/core';
-import { verifyPassword } from '@billing-agent/core';
+import {
+  ConfigError,
+  encryptSecret,
+  listAdapterProviders,
+  parseMasterKey,
+  requiredCredentialKeys,
+  validateSecretPayload,
+  verifyPassword,
+} from '@billing-agent/core';
 import { assertPublicHttpUrl, isWatchLocked } from '@billing-agent/price-monitor';
 import { requireJwtAuth } from './auth.js';
 import { signAccessToken } from './jwt.js';
@@ -51,6 +60,47 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function publicJob(job: JobDocument): Omit<JobDocument, 'credentialsEnv'> {
+  const { credentialsEnv: _ignored, ...rest } = job;
+  return rest;
+}
+
+function readSecretValues(body: unknown): Record<string, string> | undefined {
+  if (!isObject(body) || !isObject(body.secrets)) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(body.secrets).map(([key, value]) => [key, String(value)]),
+  );
+}
+
+async function persistJobSecrets(
+  store: BillingStore,
+  job: JobDocument,
+  values: Record<string, string>,
+): Promise<void> {
+  const masterKey = parseMasterKey(process.env);
+  const existing = await store.listSecrets(job.id);
+  const byKey = new Map(existing.map((secret) => [secret.key, secret]));
+  const now = new Date().toISOString();
+
+  for (const [key, value] of Object.entries(values)) {
+    const encrypted = encryptSecret(value, masterKey);
+    const previous = byKey.get(key);
+    await store.upsertSecret({
+      id: previous?.id ?? randomUUID(),
+      userId: job.userId,
+      jobId: job.id,
+      key,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      tag: encrypted.tag,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    });
+  }
+}
+
 function coerceJobDocument(
   payload: unknown,
   userId: string,
@@ -63,7 +113,6 @@ function coerceJobDocument(
     provider: '',
     enabled: true,
     schedule: null,
-    credentialsEnv: {},
     notify: { title: '' },
   };
 
@@ -76,14 +125,6 @@ function coerceJobDocument(
       payload.schedule === null || typeof payload.schedule === 'string'
         ? payload.schedule
         : base.schedule,
-    credentialsEnv: isObject(payload.credentialsEnv)
-      ? Object.fromEntries(
-          Object.entries(payload.credentialsEnv).map(([key, value]) => [
-            key,
-            String(value),
-          ]),
-        )
-      : base.credentialsEnv,
     notify:
       isObject(payload.notify) && typeof payload.notify.title === 'string'
         ? { title: payload.notify.title }
@@ -264,9 +305,14 @@ export async function handleRoute(
     return;
   }
 
+  if (method === 'GET' && pathname === '/providers') {
+    sendJson(res, 200, { providers: listAdapterProviders() });
+    return;
+  }
+
   if (method === 'GET' && pathname === '/jobs') {
     const jobs = await ctx.store.listJobs({ userId: user.userId });
-    sendJson(res, 200, jobs);
+    sendJson(res, 200, jobs.map(publicJob));
     return;
   }
 
@@ -300,28 +346,124 @@ export async function handleRoute(
     return;
   }
 
-  if (method === 'GET' && pathname.startsWith('/jobs/')) {
-    const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
+  if (
+    (method === 'GET' || method === 'PUT') &&
+    pathname.startsWith('/jobs/') &&
+    pathname.endsWith('/secrets')
+  ) {
+    const rawJobId = pathname.slice('/jobs/'.length, -'/secrets'.length);
+    if (!rawJobId || rawJobId.endsWith('/') || rawJobId.includes('/')) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+    const jobId = decodeURIComponent(rawJobId);
     const job = await ctx.store.getJob(jobId);
     if (!job || job.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
-    sendJson(res, 200, job);
+
+    if (method === 'GET') {
+      const credentialKeys = requiredCredentialKeys(job.provider);
+      const existing = await ctx.store.listSecrets(jobId);
+      const setKeys = new Set(existing.map((secret) => secret.key));
+      sendJson(res, 200, {
+        keys: credentialKeys.map((key) => ({
+          key,
+          set: setKeys.has(key),
+        })),
+      });
+      return;
+    }
+
+    const body = await readJsonBody(req);
+    const values =
+      isObject(body) && isObject(body.values)
+        ? Object.fromEntries(
+            Object.entries(body.values).map(([key, value]) => [key, String(value)]),
+          )
+        : {};
+    const validationError = validateSecretPayload(job.provider, values, 'update');
+    if (validationError) {
+      sendJson(res, 400, { error: validationError });
+      return;
+    }
+
+    const recent = await ctx.store.listRuns({ jobId, limit: 20 });
+    if (recent.some((run) => run.status === 'running')) {
+      sendJson(res, 409, { error: 'Job already running' });
+      return;
+    }
+
+    try {
+      await persistJobSecrets(ctx.store, job, values);
+      sendJson(res, 200, { ok: true });
+      return;
+    } catch (error) {
+      if (error instanceof ConfigError) {
+        sendJson(res, 500, { error: 'Internal server error' });
+        return;
+      }
+      throw error;
+    }
+  }
+
+  if (method === 'GET' && pathname.startsWith('/jobs/')) {
+    const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
+    if (jobId.includes('/')) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+    const job = await ctx.store.getJob(jobId);
+    if (!job || job.userId !== user.userId) {
+      sendJson(res, 404, { error: 'Job not found' });
+      return;
+    }
+    sendJson(res, 200, publicJob(job));
     return;
   }
 
   if (method === 'POST' && pathname === '/jobs') {
-    const body = await readJsonBody(req);
-    const job = coerceJobDocument(body, user.userId);
-    await ctx.store.upsertJob(job);
-    await bumpJobsGeneration(ctx.store);
-    sendJson(res, 201, job);
-    return;
+    try {
+      const body = await readJsonBody(req);
+      const secrets = readSecretValues(body);
+      const job = coerceJobDocument(body, user.userId);
+      const validationError = validateSecretPayload(
+        job.provider,
+        secrets ?? {},
+        'create',
+      );
+      if (validationError) {
+        sendJson(res, 400, { error: validationError });
+        return;
+      }
+      const stored = publicJob(job) as JobDocument;
+      await ctx.store.upsertJob(stored);
+      if (secrets && Object.keys(secrets).length > 0) {
+        await persistJobSecrets(ctx.store, stored, secrets);
+      }
+      await bumpJobsGeneration(ctx.store);
+      sendJson(res, 201, stored);
+      return;
+    } catch (error) {
+      if (error instanceof ConfigError) {
+        sendJson(res, 500, { error: 'Internal server error' });
+        return;
+      }
+      if (error instanceof Error) {
+        sendJson(res, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
   }
 
   if (method === 'PATCH' && pathname.startsWith('/jobs/')) {
     const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
+    if (jobId.includes('/')) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
     const existing = await ctx.store.getJob(jobId);
     if (!existing || existing.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
@@ -329,25 +471,48 @@ export async function handleRoute(
     }
     const body = await readJsonBody(req);
     const patch = isObject(body) ? body : {};
+    if (
+      'provider' in patch &&
+      typeof patch.provider === 'string' &&
+      patch.provider !== existing.provider
+    ) {
+      sendJson(res, 400, { error: 'job provider cannot be changed' });
+      return;
+    }
+    if ('secrets' in patch || 'credentialsEnv' in patch) {
+      sendJson(res, 400, { error: 'use PUT /jobs/:id/secrets to update secrets' });
+      return;
+    }
     const merged = coerceJobDocument(
-      { ...existing, ...patch, id: jobId },
+      {
+        id: jobId,
+        provider: existing.provider,
+        enabled: patch.enabled,
+        schedule: patch.schedule,
+        notify: patch.notify,
+      },
       existing.userId,
       existing,
     );
-    await ctx.store.upsertJob(merged);
+    const stored = publicJob(merged) as JobDocument;
+    await ctx.store.upsertJob(stored);
     await bumpJobsGeneration(ctx.store);
-    sendJson(res, 200, merged);
+    sendJson(res, 200, stored);
     return;
   }
 
   if (method === 'DELETE' && pathname.startsWith('/jobs/')) {
     const jobId = decodeURIComponent(pathname.slice('/jobs/'.length));
+    if (jobId.includes('/')) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
     const existing = await ctx.store.getJob(jobId);
     if (!existing || existing.userId !== user.userId) {
       sendJson(res, 404, { error: 'Job not found' });
       return;
     }
-    const disabled = { ...existing, enabled: false };
+    const disabled = publicJob({ ...existing, enabled: false }) as JobDocument;
     await ctx.store.upsertJob(disabled);
     await bumpJobsGeneration(ctx.store);
     sendJson(res, 200, disabled);

@@ -43,8 +43,9 @@ Key runtime variables:
 | `CORS_ORIGINS` | Comma-separated browser origins allowed to call API (optional) |
 | `NTFY_TOPIC` | ntfy topic (secret) |
 | `MISTRAL_API_KEY` | Mistral API key (used for captcha + recovery) |
-| `TNPDCL_USERNAME` | TNPDCL login |
-| `TNPDCL_PASSWORD` | TNPDCL login |
+| `SECRETS_MASTER_KEY` | 32-byte AES key for per-job secrets (hex or base64). Generate with `openssl rand -hex 32` |
+| `TNPDCL_USERNAME` | Legacy TNPDCL login env var; copied into encrypted job secrets on first boot migrate, then unset on the job |
+| `TNPDCL_PASSWORD` | Legacy TNPDCL login env var; same one-time migrate behavior as `TNPDCL_USERNAME` |
 
 ## Install
 
@@ -166,7 +167,6 @@ curl -X POST http://localhost:8080/jobs \
     "provider": "dummy",
     "enabled": true,
     "schedule": null,
-    "credentialsEnv": {},
     "notify": { "title": "Dummy Bill" }
   }'
 ```
@@ -184,7 +184,7 @@ Collection variables:
 - `jobId` (default `smoke-test`)
 - `runId` (set after listing runs)
 
-The collection includes all current API endpoints (`/health`, `/runs`, `/jobs` CRUD, `/jobs/:id/run`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
+The collection includes all current API endpoints (`/health`, `/providers`, `/runs`, `/jobs` CRUD, `/jobs/:id/secrets`, `/jobs/:id/run`). `Health` is no-auth; all other requests use bearer auth via `{{apiToken}}`.
 
 ## Price monitor notes
 
@@ -217,7 +217,7 @@ CI/test expectations: mocks only; no live Atlas and no live TNPDCL logins.
 
 - Build with `Dockerfile` (`npm run build:server` — core/api/worker only; web SPA is not included).
 - Runtime command is already `worker daemon` (scheduler + embedded API in one process).
-- Set runtime env vars: `MONGODB_URI`, `JWT_SECRET`, `HTTP_PORT`, `CORS_ORIGINS`, `NTFY_TOPIC`, `MISTRAL_API_KEY`, provider credentials.
+- Set runtime env vars: `MONGODB_URI`, `JWT_SECRET`, `HTTP_PORT`, `CORS_ORIGINS`, `NTFY_TOPIC`, `MISTRAL_API_KEY`, `SECRETS_MASTER_KEY`. Keep `TNPDCL_USERNAME` / `TNPDCL_PASSWORD` only until the first successful boot migrate from seed JSON.
 - Expose `HTTP_PORT`.
 - Health check: `GET /health`.
 - Recommended memory: at least 1 GB (Chromium spikes).

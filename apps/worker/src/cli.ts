@@ -8,6 +8,7 @@ import {
   hashPassword,
   loadConfigFromStore,
   loadSeedConfig,
+  migrateJobSecrets,
   registerBuiltInAdapters,
   runJob,
   runJobs,
@@ -70,6 +71,12 @@ function resolveHttpPort(env: NodeJS.ProcessEnv = process.env): number {
   return port;
 }
 
+async function migrateConnectedStore(
+  store: Awaited<ReturnType<typeof connectStore>>,
+): Promise<void> {
+  await migrateJobSecrets({ store, env: process.env });
+}
+
 function browserLoadHtmlFactory(app: Awaited<ReturnType<typeof loadConfigFromStore>>) {
   return async (url: string): Promise<string> =>
     withBrowser(app.browser, async (page) => {
@@ -92,6 +99,7 @@ program
 
       const store = await connectStore(requireMongoUri());
       try {
+        await migrateConnectedStore(store);
         const app = await loadConfigFromStore(store);
         const jobIds = options.all ? 'all' : [options.job as string];
         const { failed } = await runJobs(app, jobIds);
@@ -163,6 +171,7 @@ program
   .command('daemon')
   .action(withErrorHandling(async () => {
     const store = await connectStore(requireMongoUri());
+    await migrateConnectedStore(store);
     const app = await loadConfigFromStore(store);
     const server = await startServer({
       port: resolveHttpPort(),
@@ -255,6 +264,7 @@ program
         for (const job of seed.jobs) {
           await store.upsertJob(job);
         }
+        await migrateConnectedStore(store);
       } finally {
         await store.close();
       }

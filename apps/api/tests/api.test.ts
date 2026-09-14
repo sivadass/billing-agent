@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import { hashPassword } from '@billing-agent/core';
 import type {
   BillingStore,
   JobDocument,
   PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
   WatchDocument,
@@ -14,6 +15,21 @@ import type {
 import { startServer } from '../src/server.ts';
 
 const JWT_SECRET = 'test-jwt-secret';
+const SECRETS_MASTER_KEY = '11'.repeat(32);
+let savedSecretsMasterKey: string | undefined;
+
+before(() => {
+  savedSecretsMasterKey = process.env.SECRETS_MASTER_KEY;
+  process.env.SECRETS_MASTER_KEY = SECRETS_MASTER_KEY;
+});
+
+after(() => {
+  if (savedSecretsMasterKey === undefined) {
+    delete process.env.SECRETS_MASTER_KEY;
+  } else {
+    process.env.SECRETS_MASTER_KEY = savedSecretsMasterKey;
+  }
+});
 
 class MemoryStore implements BillingStore {
   settings: SettingsDocument = {
@@ -26,6 +42,7 @@ class MemoryStore implements BillingStore {
   };
 
   jobs = new Map<string, JobDocument>();
+  secrets = new Map<string, SecretDocument>();
   watches = new Map<string, WatchDocument>();
   priceChecks = new Map<string, PriceCheckDocument>();
   runs = new Map<string, RunDocument>();
@@ -49,6 +66,35 @@ class MemoryStore implements BillingStore {
 
   async upsertJob(job: JobDocument): Promise<void> {
     this.jobs.set(job.id, job);
+  }
+
+  async listSecrets(jobId: string): Promise<SecretDocument[]> {
+    return [...this.secrets.values()]
+      .filter((secret) => secret.jobId === jobId)
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  async upsertSecret(doc: SecretDocument): Promise<void> {
+    const mapKey = `${doc.jobId}\0${doc.key}`;
+    const existing = this.secrets.get(mapKey);
+    if (existing) {
+      this.secrets.set(mapKey, {
+        ...existing,
+        ciphertext: doc.ciphertext,
+        iv: doc.iv,
+        tag: doc.tag,
+        updatedAt: doc.updatedAt,
+      });
+      return;
+    }
+    this.secrets.set(mapKey, doc);
+  }
+
+  async unsetJobCredentialsEnv(jobId: string): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    const { credentialsEnv: _ignored, ...rest } = job;
+    this.jobs.set(jobId, rest);
   }
 
   async upsertSettings(settings: Omit<SettingsDocument, 'id'>): Promise<void> {
@@ -625,6 +671,248 @@ describe('api CORS', () => {
     });
     assert.equal(response.status, 401);
     assert.equal(response.headers.get('access-control-allow-origin'), null);
+  });
+});
+
+describe('job secrets', () => {
+  it('GET /providers returns tnpdcl and dummy credential keys', async () => {
+    const { handle, token } = await setupAuthedServer();
+    const response = await fetch(`http://127.0.0.1:${handle.port}/providers`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      providers: Array<{ id: string; credentialKeys: string[] }>;
+    };
+    assert.deepEqual(body.providers, [
+      { id: 'tnpdcl', credentialKeys: ['username', 'password'] },
+      { id: 'dummy', credentialKeys: [] },
+    ]);
+  });
+
+  it('creates tnpdcl jobs with write-only secrets', async () => {
+    const { handle, token } = await setupAuthedServer();
+    const created = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'home-eb',
+        provider: 'tnpdcl',
+        enabled: true,
+        schedule: null,
+        notify: { title: 'Bill' },
+        secrets: { username: 'user1', password: 'pass1' },
+      }),
+    });
+    assert.equal(created.status, 201);
+    const job = (await created.json()) as JobDocument & {
+      secrets?: unknown;
+      credentialsEnv?: unknown;
+    };
+    assert.equal(job.secrets, undefined);
+    assert.equal(job.credentialsEnv, undefined);
+
+    const keysResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/jobs/home-eb/secrets`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    assert.equal(keysResponse.status, 200);
+    const keysBody = (await keysResponse.json()) as {
+      keys: Array<{ key: string; set: boolean }>;
+    };
+    assert.deepEqual(keysBody.keys, [
+      { key: 'username', set: true },
+      { key: 'password', set: true },
+    ]);
+
+    const getJob = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const fetched = (await getJob.json()) as JobDocument & {
+      secrets?: unknown;
+      credentialsEnv?: unknown;
+    };
+    assert.equal(fetched.credentialsEnv, undefined);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(fetched, 'password'),
+      false,
+    );
+  });
+
+  it('returns 400 when creating tnpdcl without required secrets', async () => {
+    const { handle, token } = await setupAuthedServer();
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'incomplete',
+        provider: 'tnpdcl',
+        enabled: true,
+        schedule: null,
+        notify: { title: 'Bill' },
+        secrets: { username: 'user1' },
+      }),
+    });
+    assert.equal(response.status, 400);
+  });
+
+  it('updates secrets with PUT and keeps unset keys', async () => {
+    const { handle, token } = await setupAuthedServer();
+    await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'home-eb',
+        provider: 'tnpdcl',
+        enabled: true,
+        schedule: null,
+        notify: { title: 'Bill' },
+        secrets: { username: 'user1', password: 'pass1' },
+      }),
+    });
+
+    const updated = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/secrets`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ values: { password: 'new-pass' } }),
+    });
+    assert.equal(updated.status, 200);
+
+    const keysResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/jobs/home-eb/secrets`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const keysBody = (await keysResponse.json()) as {
+      keys: Array<{ key: string; set: boolean }>;
+    };
+    assert.deepEqual(keysBody.keys, [
+      { key: 'username', set: true },
+      { key: 'password', set: true },
+    ]);
+  });
+
+  it('returns 409 when updating secrets while a run is active', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob({
+      id: 'home-eb',
+      userId: user.id,
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: null,
+      notify: { title: 'Bill' },
+    });
+    await store.createRun({
+      id: 'run-active',
+      jobId: 'home-eb',
+      userId: user.id,
+      provider: 'tnpdcl',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      recoveryAttempted: false,
+      recoverySucceeded: false,
+      overlayActivated: false,
+      billSummary: null,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb/secrets`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ values: { password: 'new-pass' } }),
+    });
+    assert.equal(response.status, 409);
+  });
+
+  it('returns 404 for another user job secrets', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    const otherUser = await createUser(store, 'other@example.com', 'other-password');
+    await store.upsertJob({
+      id: 'private-job',
+      userId: user.id,
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: null,
+      notify: { title: 'Bill' },
+    });
+    const otherLogin = await login(handle.port, otherUser.email, 'other-password');
+    const otherToken = otherLogin.body.token;
+    if (!otherToken) throw new Error('other login failed');
+
+    const response = await fetch(
+      `http://127.0.0.1:${handle.port}/jobs/private-job/secrets`,
+      { headers: { Authorization: `Bearer ${otherToken}` } },
+    );
+    assert.equal(response.status, 404);
+  });
+
+  it('returns 400 when PATCH tries to change provider', async () => {
+    const { handle, token } = await setupAuthedServer();
+    await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: 'home-eb',
+        provider: 'tnpdcl',
+        enabled: true,
+        schedule: null,
+        notify: { title: 'Bill' },
+        secrets: { username: 'user1', password: 'pass1' },
+      }),
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs/home-eb`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ provider: 'dummy' }),
+    });
+    assert.equal(response.status, 400);
+  });
+
+  it('GET /jobs list items omit credentialsEnv', async () => {
+    const store = new MemoryStore();
+    const { handle, user, token } = await setupAuthedServer({ store });
+    await store.upsertJob({
+      id: 'legacy-job',
+      userId: user.id,
+      provider: 'dummy',
+      enabled: true,
+      schedule: null,
+      credentialsEnv: { username: 'TNPDCL_USERNAME' },
+      notify: { title: 'Bill' },
+    });
+
+    const response = await fetch(`http://127.0.0.1:${handle.port}/jobs`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const jobs = (await response.json()) as Array<JobDocument & { credentialsEnv?: unknown }>;
+    assert.equal(jobs[0]?.credentialsEnv, undefined);
   });
 });
 
