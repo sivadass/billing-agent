@@ -8,6 +8,14 @@ export {
   type MistralCompletionResult,
   type MistralToolCall,
 } from './agent.js';
+export type { AuthoringResumeValue } from './graph.js';
+export {
+  createAuthoringRuntime,
+  createEphemeralAuthoringRuntime,
+  createInMemoryCheckpointPort,
+  type AuthoringCheckpointPort,
+  type AuthoringRuntime,
+} from './runtime.js';
 export {
   CONVERSATION_TOOLS,
   createConversationEventBus,
