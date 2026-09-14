@@ -24,7 +24,6 @@ describe('JobsPage', () => {
         provider: 'dummy',
         enabled: true,
         schedule: '0 9 * * *',
-        credentialsEnv: {},
         notify: { title: 'Bill reminder' },
       },
     ]);
@@ -34,7 +33,6 @@ describe('JobsPage', () => {
       provider: 'dummy',
       enabled: false,
       schedule: '0 9 * * *',
-      credentialsEnv: {},
       notify: { title: 'Bill reminder' },
     });
     vi.mocked(jobsApi.updateJob).mockResolvedValue({
@@ -42,7 +40,6 @@ describe('JobsPage', () => {
       provider: 'dummy',
       enabled: true,
       schedule: '0 9 * * *',
-      credentialsEnv: {},
       notify: { title: 'Bill reminder' },
     });
   });

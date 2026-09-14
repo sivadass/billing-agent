@@ -37,7 +37,39 @@ export async function getJob(id: string): Promise<JobDocument> {
   return parseJson<JobDocument>(response);
 }
 
-export async function createJob(job: JobDocument): Promise<JobDocument> {
+export async function listProviders(): Promise<{
+  providers: Array<{ id: string; credentialKeys: string[] }>;
+}> {
+  const response = await apiFetch('/providers');
+  await throwForNonOk(response);
+  return parseJson<{ providers: Array<{ id: string; credentialKeys: string[] }> }>(
+    response,
+  );
+}
+
+export async function getJobSecrets(
+  id: string,
+): Promise<{ keys: Array<{ key: string; set: boolean }> }> {
+  const response = await apiFetch(`/jobs/${encodeURIComponent(id)}/secrets`);
+  await throwForNonOk(response);
+  return parseJson<{ keys: Array<{ key: string; set: boolean }> }>(response);
+}
+
+export async function updateJobSecrets(
+  id: string,
+  values: Record<string, string>,
+): Promise<void> {
+  const response = await apiFetch(`/jobs/${encodeURIComponent(id)}/secrets`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ values }),
+  });
+  await throwForNonOk(response);
+}
+
+export async function createJob(
+  job: JobDocument & { secrets?: Record<string, string> },
+): Promise<JobDocument> {
   const response = await apiFetch('/jobs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

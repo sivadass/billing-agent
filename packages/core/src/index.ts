@@ -1,3 +1,4 @@
+export * from './adapters/credential-keys.js';
 export * from './adapters/dummy.js';
 export * from './adapters/registry.js';
 export * from './adapters/tnpdcl.js';
@@ -8,9 +9,11 @@ export * from './captcha.js';
 export * from './config.js';
 export * from './errors.js';
 export * from './job-runner.js';
+export * from './migrate-job-secrets.js';
 export * from './logger.js';
 export * from './notify.js';
 export * from './overlay.js';
 export * from './recovery.js';
+export * from './secrets.js';
 export * from './store/mongo.js';
 export * from './store/types.js';

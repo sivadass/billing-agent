@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { requiredCredentialKeys } from './adapters/credential-keys.js';
 import { ConfigError } from './errors.js';
+import { decryptSecret, parseMasterKey } from './secrets.js';
 import type { BillingStore, JobDocument, SettingsDocument } from './store/types.js';
 
 export type BrowserConfig = SettingsDocument['browser'];
@@ -72,19 +74,33 @@ function resolveEnv(env: NodeJS.ProcessEnv, envName: unknown, field: string): st
   return value;
 }
 
-/** Resolves a job's credentials from the environment. Called lazily by the job runner, not at config load time. */
-export function resolveJobCredentials(
+/** Resolves a job's credentials from encrypted secrets. Called lazily by the job runner. */
+export async function resolveJobSecrets(
   job: JobConfig,
+  store: BillingStore | undefined,
   env: NodeJS.ProcessEnv = process.env,
-): Record<string, string> {
-  const credentials: Record<string, string> = {};
-  for (const [field, envName] of Object.entries(job.credentialsEnv)) {
-    credentials[field] = resolveEnv(
-      env,
-      envName,
-      `jobs.${job.id}.credentials.${field}Env`,
-    );
+): Promise<Record<string, string>> {
+  const required = requiredCredentialKeys(job.provider);
+  if (required.length === 0) {
+    return {};
   }
+  if (!store) {
+    throw new ConfigError('Missing secrets store');
+  }
+
+  const masterKey = parseMasterKey(env);
+  const secrets = await store.listSecrets(job.id);
+  const credentials: Record<string, string> = {};
+  for (const secret of secrets) {
+    credentials[secret.key] = decryptSecret(secret, masterKey);
+  }
+
+  for (const key of required) {
+    if (!credentials[key]) {
+      throw new ConfigError(`Missing secret "${key}" for job ${job.id}`);
+    }
+  }
+
   return credentials;
 }
 
@@ -135,21 +151,24 @@ function parseJob(value: unknown, index: number): JobConfig {
     throw new ConfigError(`jobs[${index}].schedule must be a string or null`);
   }
 
-  const rawCredentials = requireObject(
-    job.credentials,
-    `jobs[${index}].credentials`,
-  );
-  const credentialsEnv: Record<string, string> = {};
-  for (const [key, envName] of Object.entries(rawCredentials)) {
-    if (!key.endsWith('Env') || key.length === 3) {
-      throw new ConfigError(
-        `jobs[${index}].credentials.${key} must be an environment reference`,
+  let credentialsEnv: Record<string, string> | undefined;
+  if (job.credentials !== undefined) {
+    const rawCredentials = requireObject(
+      job.credentials,
+      `jobs[${index}].credentials`,
+    );
+    credentialsEnv = {};
+    for (const [key, envName] of Object.entries(rawCredentials)) {
+      if (!key.endsWith('Env') || key.length === 3) {
+        throw new ConfigError(
+          `jobs[${index}].credentials.${key} must be an environment reference`,
+        );
+      }
+      credentialsEnv[key.slice(0, -3)] = requireString(
+        envName,
+        `jobs[${index}].credentials.${key}`,
       );
     }
-    credentialsEnv[key.slice(0, -3)] = requireString(
-      envName,
-      `jobs[${index}].credentials.${key}`,
-    );
   }
 
   const notify = requireObject(job.notify, `jobs[${index}].notify`);
@@ -159,7 +178,7 @@ function parseJob(value: unknown, index: number): JobConfig {
     provider: requireString(job.provider, `jobs[${index}].provider`),
     enabled: requireBoolean(job.enabled, `jobs[${index}].enabled`),
     schedule,
-    credentialsEnv,
+    ...(credentialsEnv === undefined ? {} : { credentialsEnv }),
     notify: {
       title: requireString(notify.title, `jobs[${index}].notify.title`),
     },

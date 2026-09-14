@@ -6,8 +6,11 @@ import type { Page } from 'playwright';
 import type { BillingAdapter, BillResult } from '../src/adapters/types.ts';
 import type { AppConfig, JobConfig } from '../src/config.ts';
 import { ConfigError, LoginError } from '../src/errors.ts';
-import type { BillingStore, RunDocument } from '../src/store/types.ts';
+import type { BillingStore, RunDocument, SecretDocument } from '../src/store/types.ts';
+import { encryptSecret } from '../src/secrets.ts';
 import { runJob, runJobs } from '../src/job-runner.ts';
+
+const masterKeyHex = '11'.repeat(32);
 
 const job: JobConfig = {
   id: 'fake-job',
@@ -15,7 +18,6 @@ const job: JobConfig = {
   provider: 'fake',
   enabled: true,
   schedule: null,
-  credentialsEnv: { username: 'FAKE_JOB_USERNAME' },
   notify: { title: 'Fake bill' },
 };
 
@@ -35,7 +37,33 @@ const app: AppConfig = {
   jobs: [job],
 };
 
-const testEnv = { FAKE_JOB_USERNAME: 'test-user' };
+const testEnv = { SECRETS_MASTER_KEY: masterKeyHex };
+
+function makeTnpdclSecrets(jobId: string): SecretDocument[] {
+  const key = Buffer.from(masterKeyHex, 'hex');
+  const username = encryptSecret('u', key);
+  const password = encryptSecret('p', key);
+  return [
+    {
+      id: 'sec-u',
+      userId: 'user-1',
+      jobId,
+      key: 'username',
+      ...username,
+      createdAt: '2026-09-14T00:00:00.000Z',
+      updatedAt: '2026-09-14T00:00:00.000Z',
+    },
+    {
+      id: 'sec-p',
+      userId: 'user-1',
+      jobId,
+      key: 'password',
+      ...password,
+      createdAt: '2026-09-14T00:00:00.000Z',
+      updatedAt: '2026-09-14T00:00:00.000Z',
+    },
+  ];
+}
 
 const billResult: BillResult = {
   provider: 'fake',
@@ -126,6 +154,9 @@ describe('runJob', () => {
       },
       getJob: async () => null,
       upsertJob: async () => {},
+      listSecrets: async () => [],
+      upsertSecret: async () => {},
+      unsetJobCredentialsEnv: async () => {},
       upsertSettings: async () => {},
       listWatches: async () => [],
       getWatch: async () => null,
@@ -218,16 +249,57 @@ describe('runJob', () => {
 
   it('resolves job credentials and sends a success notification with the configured priority', async () => {
     const notifications: Array<Record<string, unknown>> = [];
+    const tnpdclJob: JobConfig = {
+      ...job,
+      id: 'tnpdcl-job',
+      provider: 'tnpdcl',
+    };
     const adapter: BillingAdapter = {
-      id: 'fake',
+      id: 'tnpdcl',
       async run(context) {
-        assert.deepEqual(context.credentials, { username: 'test-user' });
+        assert.deepEqual(context.credentials, { username: 'u', password: 'p' });
         assert.equal(context.timeoutMs, app.browser.timeoutMs);
         return billResult;
       },
     };
+    const store: BillingStore = {
+      getSettings: async () => {
+        throw new Error('not used');
+      },
+      listJobs: async () => [],
+      getJob: async () => null,
+      upsertJob: async () => {},
+      listSecrets: async () => makeTnpdclSecrets('tnpdcl-job'),
+      upsertSecret: async () => {},
+      unsetJobCredentialsEnv: async () => {},
+      upsertSettings: async () => {},
+      listWatches: async () => [],
+      getWatch: async () => null,
+      upsertWatch: async () => {},
+      deleteWatch: async () => {},
+      createPriceCheck: async () => {},
+      finishPriceCheck: async () => {},
+      listPriceChecks: async () => [],
+      listActiveOverlays: async () => [],
+      recordOverlaySuccess: async (input) => ({
+        provider: input.provider,
+        jobId: input.jobId,
+        fingerprint: input.fingerprint,
+        patch: input.patch,
+        successCount: 1,
+        status: 'candidate',
+        updatedAt: new Date().toISOString(),
+      }),
+      createRun: async () => {},
+      finishRun: async () => {},
+      listRuns: async () => [],
+      getRun: async () => null,
+      findUserByEmail: async () => null,
+      getUser: async () => null,
+      close: async () => {},
+    };
 
-    const result = await runJob(app, job, {
+    const result = await runJob(app, tnpdclJob, {
       withBrowser: async (_config, callback) =>
         callback({} as Page),
       sendNtfy: async (options) => {
@@ -238,6 +310,7 @@ describe('runJob', () => {
       }),
       getAdapter: () => adapter,
       env: testEnv,
+      store,
     });
 
     assert.deepEqual(result, { ok: true, result: billResult });
@@ -245,7 +318,7 @@ describe('runJob', () => {
       {
         baseUrl: app.ntfy.baseUrl,
         topic: app.ntfy.topic,
-        title: job.notify.title,
+        title: tnpdclJob.notify.title,
         body:
           'Amount: ₹123.45\nDue: 2026-08-20\nAccount: ****1234',
         priority: app.ntfy.priority,
@@ -470,31 +543,47 @@ describe('runJobs', () => {
   it('runs all enabled jobs and continues after failures', async () => {
     const attempted: string[] = [];
     const jobs: JobConfig[] = [
-      {
-        ...job,
-        id: 'fails',
-        credentialsEnv: { marker: 'FAILS_MARKER' },
-      },
-      {
-        ...job,
-        id: 'succeeds',
-        credentialsEnv: { marker: 'SUCCEEDS_MARKER' },
-      },
-      {
-        ...job,
-        id: 'disabled',
-        enabled: false,
-        credentialsEnv: { marker: 'DISABLED_MARKER' },
-      },
+      { ...job, id: 'fails' },
+      { ...job, id: 'succeeds' },
+      { ...job, id: 'disabled', enabled: false },
     ];
-    const adapter: BillingAdapter = {
-      id: 'fake',
-      async run(context) {
-        const marker = context.credentials.marker;
-        attempted.push(marker);
-        if (marker === 'fails') throw new LoginError('login failed');
-        return billResult;
+    const store: BillingStore = {
+      getSettings: async () => {
+        throw new Error('not used');
       },
+      listJobs: async () => [],
+      getJob: async () => null,
+      upsertJob: async () => {},
+      listSecrets: async () => [],
+      upsertSecret: async () => {},
+      unsetJobCredentialsEnv: async () => {},
+      upsertSettings: async () => {},
+      listWatches: async () => [],
+      getWatch: async () => null,
+      upsertWatch: async () => {},
+      deleteWatch: async () => {},
+      createPriceCheck: async () => {},
+      finishPriceCheck: async () => {},
+      listPriceChecks: async () => [],
+      listActiveOverlays: async () => [],
+      recordOverlaySuccess: async (input) => ({
+        provider: input.provider,
+        jobId: input.jobId,
+        fingerprint: input.fingerprint,
+        patch: input.patch,
+        successCount: 1,
+        status: 'candidate',
+        updatedAt: new Date().toISOString(),
+      }),
+      createRun: async (run) => {
+        attempted.push(run.jobId);
+      },
+      finishRun: async () => {},
+      listRuns: async () => [],
+      getRun: async () => null,
+      findUserByEmail: async () => null,
+      getUser: async () => null,
+      close: async () => {},
     };
 
     const result = await runJobs(
@@ -507,12 +596,18 @@ describe('runJobs', () => {
         createMistralCaptchaSolver: () => ({
           solveFromImageBase64: async () => 'captcha',
         }),
-        getAdapter: () => adapter,
-        env: {
-          FAILS_MARKER: 'fails',
-          SUCCEEDS_MARKER: 'succeeds',
-          DISABLED_MARKER: 'disabled',
-        },
+        getAdapter: () => ({
+          id: 'fake',
+          async run() {
+            const jobId = attempted.at(-1);
+            if (jobId === 'fails') {
+              throw new LoginError('login failed');
+            }
+            return billResult;
+          },
+        }),
+        env: testEnv,
+        store,
       },
     );
 

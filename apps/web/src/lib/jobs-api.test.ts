@@ -24,7 +24,6 @@ describe('jobs and runs API helpers', () => {
         provider: 'dummy',
         enabled: true,
         schedule: null,
-        credentialsEnv: {},
         notify: { title: 'Bill' },
       },
     ];

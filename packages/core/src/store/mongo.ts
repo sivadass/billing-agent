@@ -7,6 +7,7 @@ import type {
   OverlaySuccessInput,
   PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SettingsDocument,
   UserDocument,
   WatchDocument,
@@ -19,6 +20,7 @@ type Update<T> = {
   $set?: Partial<T>;
   $setOnInsert?: Partial<T>;
   $inc?: Record<string, number>;
+  $unset?: Record<string, ''>;
 };
 
 type CollectionLike<T extends Record<string, unknown>> = {
@@ -40,6 +42,7 @@ type StoreCollections = {
   settings: CollectionLike<SettingsDocument>;
   overlays: CollectionLike<OverlayDocument>;
   runs: CollectionLike<RunDocument>;
+  secrets: CollectionLike<SecretDocument>;
   watches: CollectionLike<WatchDocument>;
   priceChecks: CollectionLike<PriceCheckDocument>;
   users: CollectionLike<UserDocument>;
@@ -89,6 +92,37 @@ export function createBillingStoreFromCollections(
 
     async upsertJob(job) {
       await collections.jobs.updateOne({ id: job.id }, { $set: job }, { upsert: true });
+    },
+
+    async listSecrets(jobId) {
+      const secrets = await collections.secrets.find({ jobId }).toArray();
+      return secrets.sort((a, b) => a.key.localeCompare(b.key));
+    },
+
+    async upsertSecret(doc) {
+      const existing = await collections.secrets.findOne({
+        jobId: doc.jobId,
+        key: doc.key,
+      });
+      if (existing) {
+        await collections.secrets.updateOne(
+          { jobId: doc.jobId, key: doc.key },
+          {
+            $set: {
+              ciphertext: doc.ciphertext,
+              iv: doc.iv,
+              tag: doc.tag,
+              updatedAt: doc.updatedAt,
+            },
+          },
+        );
+        return;
+      }
+      await collections.secrets.insertOne(doc);
+    },
+
+    async unsetJobCredentialsEnv(jobId) {
+      await collections.jobs.updateOne({ id: jobId }, { $unset: { credentialsEnv: '' } });
     },
 
     async upsertSettings(settings) {
@@ -273,12 +307,15 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   await watches.createIndex({ userId: 1 });
   await priceChecks.createIndex({ watchId: 1 });
   await priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
+  const secrets = db.collection<SecretDocument>('secrets');
+  await secrets.createIndex({ jobId: 1, key: 1 }, { unique: true });
   return createBillingStoreFromCollections(
     {
       jobs: db.collection<JobDocument>('jobs'),
       settings: db.collection<SettingsDocument>('settings'),
       overlays: db.collection<OverlayDocument>('learned_overlays'),
       runs: db.collection<RunDocument>('runs'),
+      secrets,
       watches,
       priceChecks,
       users,

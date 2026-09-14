@@ -3,7 +3,6 @@ export type JobDocument = {
   provider: string;
   enabled: boolean;
   schedule: string | null;
-  credentialsEnv: Record<string, string>;
   notify: { title: string };
 };
 

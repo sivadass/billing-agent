@@ -6,6 +6,7 @@ import type {
   OverlayDocument,
   PriceCheckDocument,
   RunDocument,
+  SecretDocument,
   SelectorOverlayPatch,
   SettingsDocument,
   UserDocument,
@@ -38,6 +39,7 @@ class MemoryCollection<T extends Record<string, unknown>> {
       $set?: Partial<T>;
       $setOnInsert?: Partial<T>;
       $inc?: Record<string, number>;
+      $unset?: Record<string, ''>;
     },
     options?: { upsert?: boolean },
   ): Promise<void> {
@@ -63,6 +65,11 @@ class MemoryCollection<T extends Record<string, unknown>> {
       for (const [key, value] of Object.entries(update.$inc)) {
         const current = Number((existing as Record<string, unknown>)[key] ?? 0);
         (existing as Record<string, unknown>)[key] = current + value;
+      }
+    }
+    if (update.$unset) {
+      for (const key of Object.keys(update.$unset)) {
+        delete (existing as Record<string, unknown>)[key];
       }
     }
   }
@@ -110,6 +117,7 @@ function createStore() {
       settings,
       overlays: new MemoryCollection<OverlayDocument>(),
       runs: new MemoryCollection<RunDocument>(),
+      secrets: new MemoryCollection<SecretDocument>(),
       watches,
       priceChecks,
       users,
@@ -363,6 +371,46 @@ describe('mongo store', () => {
 
     const missing = await store.findUserByEmail('missing@example.com');
     assert.equal(missing, null);
+  });
+
+  it('upserts secrets by jobId+key and lists them', async () => {
+    const { store } = createStore();
+    const first: SecretDocument = {
+      id: 'sec-1',
+      userId: 'user-1',
+      jobId: 'home-eb',
+      key: 'password',
+      ciphertext: 'c',
+      iv: 'i',
+      tag: 't',
+      createdAt: '2026-09-14T00:00:00.000Z',
+      updatedAt: '2026-09-14T00:00:00.000Z',
+    };
+    await store.upsertSecret(first);
+    await store.upsertSecret({
+      ...first,
+      ciphertext: 'c2',
+      updatedAt: '2026-09-14T01:00:00.000Z',
+    });
+    const rows = await store.listSecrets('home-eb');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.ciphertext, 'c2');
+  });
+
+  it('unsets legacy credentialsEnv', async () => {
+    const { store } = createStore();
+    await store.upsertJob({
+      id: 'home-eb',
+      userId: 'user-1',
+      provider: 'tnpdcl',
+      enabled: true,
+      schedule: null,
+      credentialsEnv: { username: 'TNPDCL_USERNAME' },
+      notify: { title: 'Bill' },
+    });
+    await store.unsetJobCredentialsEnv('home-eb');
+    const job = await store.getJob('home-eb');
+    assert.equal(job?.credentialsEnv, undefined);
   });
 
   it('recordOverlaySuccess activates after three successes', async () => {

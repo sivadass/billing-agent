@@ -70,6 +70,18 @@
       ]
     },
     {
+      "name": "Providers",
+      "item": [
+        {
+          "name": "List Providers",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/providers"
+          }
+        }
+      ]
+    },
+    {
       "name": "Jobs",
       "item": [
         {
@@ -105,9 +117,33 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"id\": \"smoke-test\",\n  \"provider\": \"dummy\",\n  \"enabled\": true,\n  \"schedule\": null,\n  \"credentialsEnv\": {},\n  \"notify\": { \"title\": \"Dummy Bill\" }\n}"
+              "raw": "{\n  \"id\": \"smoke-test\",\n  \"provider\": \"dummy\",\n  \"enabled\": true,\n  \"schedule\": null,\n  \"notify\": { \"title\": \"Dummy Bill\" }\n}"
             },
             "url": "{{baseUrl}}/jobs"
+          }
+        },
+        {
+          "name": "Get Job Secrets",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs/{{jobId}}/secrets"
+          }
+        },
+        {
+          "name": "Update Job Secrets",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"values\": {\n    \"password\": \"new-password\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/jobs/{{jobId}}/secrets"
           }
         },
         {

@@ -7,7 +7,7 @@ import { getAdapter } from './adapters/registry.js';
 import { withBrowser } from './browser.js';
 import { createMistralCaptchaSolver, type CaptchaSolver } from './captcha.js';
 import {
-  resolveJobCredentials,
+  resolveJobSecrets,
   resolveMistralApiKey,
   type AppConfig,
   type JobConfig,
@@ -229,7 +229,11 @@ export async function runJob(
   runnerDeps.onRunCreated?.(runId);
 
   try {
-    const credentials = resolveJobCredentials(job, runnerDeps.env);
+    const credentials = await resolveJobSecrets(
+      job,
+      runnerDeps.store,
+      runnerDeps.env,
+    );
     const proposePatch =
       deps.proposeOverlayPatch ?? createRecoveryPatchProposer(app, runnerDeps);
 
