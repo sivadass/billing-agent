@@ -308,7 +308,17 @@ export async function connectStore(uri: string): Promise<BillingStore> {
   await priceChecks.createIndex({ watchId: 1 });
   await priceChecks.createIndex({ watchId: 1, checkedAt: -1 });
   const secrets = db.collection<SecretDocument>('secrets');
-  await secrets.createIndex({ jobId: 1, key: 1 }, { unique: true });
+  // Partial index: the collection may also hold unrelated rows (e.g. conversation
+  // authoring with jobId unset). Only enforce uniqueness for per-job secrets.
+  await secrets.createIndex(
+    { jobId: 1, key: 1 },
+    {
+      unique: true,
+      partialFilterExpression: {
+        jobId: { $exists: true, $type: 'string' },
+      },
+    },
+  );
   return createBillingStoreFromCollections(
     {
       jobs: db.collection<JobDocument>('jobs'),
